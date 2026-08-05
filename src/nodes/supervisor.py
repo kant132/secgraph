@@ -31,7 +31,8 @@ def _build_state_summary(state: AuditState) -> str:
             return "初始状态：无 findings，无 work_list。需要 discover 入口方法。"
         return f"已 discover {len(work_list)} 个方法，audit_index={audit_index}，但无 findings。"
 
-    has_payload = sum(1 for f in findings if f.payload)
+    # 区分"audit 生成的初始 payload"和"trace_route 已分析的可达 payload"
+    traced = sum(1 for f in findings if "[路由可达性分析]" in (f.evidence or ""))
     has_poc = sum(1 for f in findings if f.poc_result)
     confirmed = sum(1 for f in findings if f.poc_result == "confirmed")
     denied = sum(1 for f in findings if f.poc_result == "denied")
@@ -39,12 +40,13 @@ def _build_state_summary(state: AuditState) -> str:
 
     return (
         f"findings: {len(findings)} 个\n"
-        f"  有 payload（已分析调用链）: {has_payload}\n"
+        f"  已分析调用链（trace_route 已跑）: {traced}\n"
         f"  有 poc_result（已验证）: {has_poc}\n"
         f"  confirmed: {confirmed}\n"
         f"  denied: {denied}\n"
         f"  pending（无 poc_result）: {pending}\n"
-        f"  需要进一步验证或有 second_payload: {pending}"
+        f"  未分析调用链（需要 trace）: {len(findings) - traced}\n"
+        f"  需要验证（有 payload 无 poc_result）: {pending}"
     )
 
 
@@ -70,12 +72,12 @@ def supervisor(state: AuditState) -> dict:
         findings = state.get("findings", [])
         if not findings:
             next_agent = "discovery"
+        elif not all("[路由可达性分析]" in (f.evidence or "") for f in findings):
+            next_agent = "trace"  # 有 findings 但没分析调用链
         elif all(f.poc_result for f in findings):
             next_agent = "FINISH"
-        elif all(f.payload for f in findings) and not all(f.poc_result for f in findings):
-            next_agent = "verify"
         else:
-            next_agent = "trace"
+            next_agent = "verify"  # 已分析调用链但没验证
         reasoning = f"降级路由 → {next_agent}"
 
     print(f"  → 决定: {next_agent}")

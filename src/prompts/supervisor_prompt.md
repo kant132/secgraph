@@ -8,8 +8,8 @@
 
 ## 调度规则
 - 如果还没有 findings（work_list 为空或 findings 为空）→ discovery
-- 如果有 findings 但还没分析调用链（findings 有 payload 但没 poc_result）→ trace
-- 如果 find ings 已分析调用链但还没验证（有 payload 但 poc_result 为空）→ verify
+- 如果有 findings 但还没分析调用链（evidence 不含"[路由可达性分析]"）→ trace
+- 如果已分析调用链（evidence 含"[路由可达性分析]"）但还没验证（无 poc_result）→ verify
 - 如果所有 findings 都有 poc_result（confirmed/denied/inconclusive）→ FINISH
 - 如果 verify 生成了 second_payload 需要重新验证 → verify
 - 如果 verify 失败需要进一步探索代码 → trace（重新分析调用链）
