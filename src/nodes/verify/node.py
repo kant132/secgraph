@@ -151,7 +151,45 @@ def verify_finding(state: AuditState) -> dict:
     denied = sum(1 for f in findings if f.poc_result == "denied")
     log.info("verify: 完成 → %d confirmed, %d denied, %d inconclusive",
              confirmed, denied, len(findings) - confirmed - denied)
-    return {"findings": findings, "explore_messages": explore_msgs, "agent_messages": agent_msgs_all}
+
+    # 写运行历史到文件（不进 state — state 是决策，不是日志）
+    _write_history(project_path, run_id := state.get("run_id", ""),
+                   explore_msgs, agent_msgs_all)
+
+    return {"findings": findings}
+
+
+def _write_history(project_path: str, run_id: str,
+                   explore_msgs: list[str], agent_msgs: list[dict]) -> None:
+    """把 explore_msgs + agent_msgs 追加到 {project_path}/verify_history.json。
+    与 DB 分离 — DB 存 findings（决策），文件存历史（日志）。"""
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    if not explore_msgs and not agent_msgs:
+        return
+    f = Path(project_path) / "verify_history.json"
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "run_id": run_id,
+        "explore_messages": explore_msgs,
+        "agent_messages": agent_msgs,
+    }
+    # 追加（不是覆盖 — 多次跑累积历史）
+    if f.exists():
+        try:
+            history = json.loads(f.read_text(encoding="utf-8"))
+            if not isinstance(history, list):
+                history = [history]
+        except Exception:
+            history = []
+    else:
+        history = []
+    history.append(entry)
+    f.write_text(json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.info("verify: 历史已写入 → %s（%d explore, %d agent）",
+             f, len(explore_msgs), len(agent_msgs))
 
 
 def _send_and_verify(f: Finding, target_url: str, tool: HttpClient) -> tuple | None:

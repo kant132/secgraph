@@ -165,5 +165,5 @@ class AuditState(TypedDict, total=False):
     verified: list[Finding]            # verified vulns -> .md
     reflection_notes: list[str]
     iteration: int
-    explore_messages: list[str]       # codegraph 探索消息（retry/agent 循环中积累）
-    agent_messages: list[dict]        # agent 对话历史（每次 tool call + result）
+    # explore_messages / agent_messages 不进 state — 由 verify 节点写到
+    # {project_path}/verify_history.json（运行历史 ≠ 决策，不污染 schema）
