@@ -39,6 +39,7 @@ class HttpClient:
 
     def __init__(self, login_info: dict, verify_tls: bool = False):
         self.login_info = login_info
+        self.base_url = login_info.get("target_url", "").rstrip("/")
         self.session: requests.Session | None = None
         self._verify_tls = verify_tls
 
@@ -99,12 +100,21 @@ class HttpClient:
     def send(self, method: str, url: str, body: str | None = None,
              headers: dict | None = None) -> tuple[int, dict, str] | None:
         """发 HTTP 请求，自动带 session cookies + 过滤后的 headers。
+        如果 url 是相对路径（如 /SqlInjectionAdvanced/attack6a），自动拼接 base_url。
         返回 (status, resp_headers, resp_body)。"""
         if not self.session:
             log.warning("http: 未登录，先调 login()")
             if not self.login():
                 return None
         assert self.session is not None
+
+        # 通用 URL 解析：相对路径自动拼接 base_url
+        if url and not url.startswith(("http://", "https://")):
+            url = url.lstrip("/")
+            if self.base_url:
+                url = f"{self.base_url}/{url}"
+            else:
+                log.warning("http: 相对 URL 但无 base_url → %s", url)
 
         # 过滤掉 session 自动管理的 headers
         clean_headers = {k: v for k, v in (headers or {}).items()
