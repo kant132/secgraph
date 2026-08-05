@@ -82,7 +82,16 @@ def trace_route(state: AuditState) -> dict:
 
             # 更新 finding
             if result.reachable:
-                f.payload = result.updated_payload
+                # 通用 payload 格式校验：如果 AI 没生成完整 HTTP 请求，用 route 路径包裹
+                payload = result.updated_payload.strip()
+                if payload and not payload.startswith(("POST ", "GET ", "PUT ", "DELETE ", "curl", "http")):
+                    # 从 chain_path 提取 route 路径（格式: route:/path → ...）
+                    import re as _re
+                    route_match = _re.search(r"route:(/[^\s]+)", chain_path)
+                    route_path = route_match.group(1) if route_match else "/"
+                    payload = f"POST {route_path} HTTP/1.1\n\n{payload}"
+                    log.info("trace_route: payload 不是 HTTP 格式，已包裹为 POST %s", route_path)
+                f.payload = payload
                 f.confidence = result.confidence
                 f.evidence += f"\n\n[路由可达性分析] 可达。条件: {result.conditions}"
                 log.info("trace_route: %s — 可达，payload 已更新", f.node_id[:30])
