@@ -139,7 +139,8 @@ class HttpClient:
             print(f"  Body: {body}")
         print(f"{'='*60}")
 
-        log.info("http: send → %s %s", method, url)
+        log.info("http: send → %s %s | headers=%s | body=%s | cookie=%s",
+                 method, url, clean_headers, body, session_cookies)
         try:
             if method.upper() == "POST":
                 resp = self.session.post(
@@ -154,12 +155,9 @@ class HttpClient:
 
             resp_headers = dict(resp.headers)
 
-            # 打印响应（Windows 控制台 GBK 兼容）
+            # 响应只打印 body（不打印 resp headers）
             safe_body = resp.text
             print(f"\n  → HTTP {resp.status_code}")
-            print(f"  Headers:")
-            for k, v in resp_headers.items():
-                print(f"    {k}: {v}")
             print(f"  Body:")
             try:
                 print(f"    {safe_body}")
@@ -167,7 +165,8 @@ class HttpClient:
                 print(f"    {safe_body.encode('utf-8', errors='replace').decode('utf-8', errors='replace')}")
             print(f"{'='*60}")
 
-            log.info("http: 响应 → status=%d len=%d", resp.status_code, len(resp.text))
+            log.info("http: 响应 → status=%d len=%d | body=%s",
+                     resp.status_code, len(resp.text), safe_body)
             return resp.status_code, resp_headers, resp.text
 
         except Exception as e:
