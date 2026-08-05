@@ -112,7 +112,15 @@ def send_payload(http_client, target_url: str, finding: Finding) -> tuple | None
     parsed = parse_payload(finding.payload or "")
     if not parsed.get("path"):
         return None
-    url = urljoin(target_url + "/", parsed["path"].lstrip("/"))
+    # 通用 URL 去重：如果 payload path 已含 target_url 的 context path，不重复拼接
+    # 例如 target_url=http://localhost/WebGoat, path=/WebGoat/attack → 不变成 /WebGoat/WebGoat/attack
+    raw_path = parsed["path"].lstrip("/")
+    from urllib.parse import urlparse as _urlparse
+    target_parsed = _urlparse(target_url)
+    target_path = target_parsed.path.strip("/")
+    if target_path and raw_path.startswith(target_path + "/"):
+        raw_path = raw_path[len(target_path) + 1:]
+    url = urljoin(target_url + "/", raw_path)
     method = parsed["method"]
     body = parsed.get("body")
     headers = {k: v for k, v in (parsed.get("headers") or {}).items()

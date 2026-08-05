@@ -39,10 +39,10 @@ def create_agent_tools(project_path: str, http_client: HttpClient):
     def send_http(method: str, url: str, body: str = "", headers: str = "") -> str:
         """发送 HTTP 请求（自动带登录 session cookies）。
         method: GET 或 POST
-        url: 完整 URL
+        url: 完整 URL（不要重复 context path，如 target_url 已含 /WebGoat 则 url 写 /SqlInjectionAdvanced/attack6a）
         body: 请求体（表单数据，如 userid_6a=Smith' UNION SELECT...）
-        headers: JSON 格式的额外 headers（可选，如 {"Content-Type": "application/x-www-form-urlencoded"}）
-        返回：HTTP 状态码 + 响应头 + 响应体（前2000字）。"""
+        headers: JSON 格式的额外 headers（可选，如 {"Content-Type": "application/x-www-form-urlencoded"})
+        返回：HTTP 状态码 + 响应头 + 响应体。"""
         hdrs = {}
         if headers:
             try:

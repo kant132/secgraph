@@ -1,13 +1,18 @@
-"""secgraph entry point — build the LangGraph, load config, invoke one run.
+"""secgraph entry point — build the LangGraph, load config, invoke one run。
 
-Usage:
+用法:
     py -3 main.py --project D:/jar/webgoat --group-id org.owasp.webgoat
     py -3 main.py --project D:/jar/webgoat --group-id org.owasp.webgoat --mode runtime
 
-LLM config (GLM 5.1 via DashScope) is in .env (gitignored):
+LLM 配置（GLM 5.1 via DashScope）在 .env（gitignored）:
     LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 """
 from __future__ import annotations
+
+import os
+# 强制 UTF-8 I/O — 修复 Windows GBK 编码崩溃（通用修复，不针对特定字符）
+os.environ["PYTHONUTF8"] = "1"
+os.environ["PYTHONIOENCODING"] = "utf-8"
 
 import argparse
 import logging
