@@ -40,15 +40,21 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = Config.from_args(project_path=args.project, group_id=args.group_id, mode=args.mode)
+    run_id = uuid.uuid4().hex[:8]
+
+    # 日志：同时写控制台 + UTF-8 文件（不依赖 PowerShell 重定向，避免 CJK 乱码）
+    log_file = Path(cfg.logs_dir) / f"run_{run_id}.log"
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)-18s %(levelname)s %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_file, encoding="utf-8"),
+        ],
     )
     # 压掉第三方库的 DEBUG 噪声
     for name in ("openai", "httpx", "httpcore", "langchain_openai", "urllib3"):
         logging.getLogger(name).setLevel(logging.WARNING)
-
-    run_id = uuid.uuid4().hex[:8]
     log.info("START  run_id=%s  mode=%s  project=%s  group_id=%s  pkg_prefix=%s  file_limit=%s",
              run_id, cfg.mode, cfg.project_path, cfg.group_id, cfg.pkg_prefix, cfg.file_limit)
     log.info("       codegraph_db=%s  llm_model=%s", cfg.codegraph_db, cfg.llm_model)
