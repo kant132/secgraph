@@ -37,9 +37,12 @@ def codegraph_explore(query: str, project_path: str, timeout: int = 30) -> str:
         if not output:
             output = result.stderr or "[empty output]"
         print(f"  → 返回 {len(output)} 字符")
-        # 打印前 800 字预览
+        # 打印前 800 字预览（Windows GBK 兼容）
         preview = output[:800]
-        print(f"  预览:\n{preview}")
+        try:
+            print(f"  预览:\n{preview}")
+        except UnicodeEncodeError:
+            print(f"  预览:\n{preview.encode('ascii', errors='replace').decode('ascii')}")
         log.info("explore: %s → %d chars", query[:50], len(output))
         return output
     except subprocess.TimeoutExpired:
@@ -48,7 +51,9 @@ def codegraph_explore(query: str, project_path: str, timeout: int = 30) -> str:
         log.warning("explore: 超时")
         return msg
     except Exception as e:
-        msg = f"[error] codegraph explore 失败: {e}"
+        # GBK 兼容：异常消息也可能含 Unicode
+        safe_e = str(e).encode('ascii', errors='replace').decode('ascii')
+        msg = f"[error] codegraph explore 失败: {safe_e}"
         print(f"  → {msg}")
-        log.warning("explore: %s", e)
+        log.warning("explore: %s", safe_e)
         return msg
