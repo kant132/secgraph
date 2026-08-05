@@ -107,12 +107,92 @@ def run_agent(finding: Finding, project_path: str, http_client: HttpClient,
             final_text = msg.content if isinstance(msg.content, str) else str(msg.content)
             agent_msgs.append({"iter": i, "type": "final", "content": final_text[:500]})
 
-    # 7. 判断是否 confirmed
-    final_lower = final_text.lower()
-    verified = any(kw in final_lower for kw in ("confirmed", "可利用", "已确认", "verified", "成功"))
-    if not verified:
-        verified = any(kw in final_lower for kw in ("数据泄露", "数据返回", "成功执行", "绕过"))
+    # 7. 用 AI 结构化输出判断 verified（基于最后一次 send_http 的响应 body）
+    verified, reasoning = _ai_judge_from_last_response(
+        finding, messages, updated_payload, target_url
+    )
 
     log.info("agent: 完成 → verified=%s, %d 条对话", verified, len(messages))
-    return verified, final_text, updated_payload, agent_msgs
+    return verified, reasoning, updated_payload, agent_msgs
+
+
+def _ai_judge_from_last_response(finding: Finding, messages: list,
+                                  updated_payload: str, target_url: str) -> tuple[bool, str]:
+    """从 agent 对话历史中找最后一次 send_http 的响应，调 ai_verify 结构化判断。
+
+    不再靠关键词匹配 agent 的 final_text — 而是让 AI 分析实际 HTTP 响应 body，
+    根据漏洞类型理解返回值是否能证明利用成功。
+    """
+    from langchain_core.messages import ToolMessage
+    from ._payload import ai_verify, parse_payload
+
+    # 从对话历史倒序找最后一次 send_http 的 ToolMessage（响应）
+    last_http_response: str | None = None
+    last_http_request: dict = {}
+
+    for msg in reversed(messages):
+        if not isinstance(msg, ToolMessage):
+            continue
+        # ToolMessage 的 content 是工具返回值
+        # send_http 工具返回格式：'HTTP {status}\nHeaders: {...}\nBody: {body}'
+        content = str(msg.content) if not isinstance(msg.content, str) else msg.content
+        if content.startswith("HTTP ") or "Headers:" in content:
+            last_http_response = content
+            break
+
+    # 找最后一次 send_http 的 AIMessage 里的 tool_call args
+    for msg in reversed(messages):
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            for call in reversed(msg.tool_calls):
+                if call["name"] == "send_http":
+                    last_http_request = call["args"]
+                    break
+            if last_http_request:
+                break
+
+    if not last_http_response:
+        return False, "agent 未发送任何 HTTP 请求"
+
+    # 解析 send_http 工具返回的响应文本
+    # 格式: 'HTTP {status}\nHeaders: {json}\nBody: {body}'
+    import json
+    lines = last_http_response.split("\n", 2)
+    status = 0
+    resp_headers = {}
+    resp_body = ""
+
+    if lines and lines[0].startswith("HTTP "):
+        try:
+            status = int(lines[0].replace("HTTP ", ""))
+        except ValueError:
+            pass
+
+    for line in lines[1:] if len(lines) > 1 else []:
+        if line.startswith("Headers: "):
+            try:
+                resp_headers = json.loads(line.replace("Headers: ", ""))
+            except json.JSONDecodeError:
+                pass
+        elif line.startswith("Body: "):
+            resp_body = line.replace("Body: ", "")
+
+    # 构造请求详情（从最后一次 send_http 的 args）
+    method = last_http_request.get("method", "POST")
+    url = last_http_request.get("url", "")
+    body = last_http_request.get("body", "")
+    headers = {}
+    hdr_str = last_http_request.get("headers", "")
+    if hdr_str:
+        try:
+            headers = json.loads(hdr_str)
+        except json.JSONDecodeError:
+            pass
+
+    # 调 ai_verify（结构化输出：verified/cvss/cia_proof/second_payload）
+    verified, reasoning, _cvss, _second = ai_verify(
+        finding, method, url, headers, body,
+        status, resp_headers, resp_body,
+    )
+
+    return verified, reasoning
 
