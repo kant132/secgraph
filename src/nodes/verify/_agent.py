@@ -76,7 +76,7 @@ def run_agent(finding: Finding, project_path: str, http_client: HttpClient,
                     {"role": "user", "content": user_msg},
                 ]
             },
-            {"recursion_limit": 25},
+            {"recursion_limit": 50},
         )
     except Exception as e:
         log.warning("agent: 子图执行失败 → %s", e)
