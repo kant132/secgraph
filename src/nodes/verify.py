@@ -18,9 +18,9 @@ import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from ..codegraph import CodegraphClient
 from ..llm import call_exploration_llm, call_retry_llm, call_verification_llm
 from ..state import AuditState, Finding
+from ..tools.codegraph_explore import codegraph_explore
 from ..tools.http_client import HttpClient, SKIP_HEADERS
 
 log = logging.getLogger("secgraph.verify")
@@ -433,12 +433,8 @@ def _ai_verify(finding: Finding, req_method: str, req_url: str,
 
 
 def _ai_retry_payload(finding: Finding, response_detail: str, failure_reason: str,
-                      method_source: str, callees_source: dict[str, str]) -> tuple[str, str]:
-    """根据 codegraph 源码 + 失败响应，让 AI 重构 payload。"""
-    callees_text = "\n\n".join(
-        f"// {nid}\n{body}" for nid, body in callees_source.items()
-    ) if callees_source else "(无)"
-
+                      exploration_result: str) -> tuple[str, str]:
+    """根据 codegraph 探索结果 + 失败响应，让 AI 重构 payload。"""
     tmpl = _RETRY_TEMPLATE.read_text(encoding="utf-8")
     prompt = (
         tmpl
@@ -446,12 +442,11 @@ def _ai_retry_payload(finding: Finding, response_detail: str, failure_reason: st
         .replace("{original_payload}", finding.payload or "")
         .replace("{response_detail}", response_detail)
         .replace("{failure_reason}", failure_reason)
-        .replace("{method_source}", method_source)
-        .replace("{callees_source}", callees_text)
+        .replace("{exploration_result}", exploration_result)
     )
 
     print(f"\n{'='*60}")
-    print(f"发送 AI payload 重构（查 codegraph 源码）...")
+    print(f"发送 AI payload 重构（基于 codegraph 探索）...")
     result = call_retry_llm(prompt)
     print(f"  corrected_payload: {result.corrected_payload[:120]}")
     print(f"  reasoning: {result.reasoning}")
@@ -514,8 +509,8 @@ def verify_finding(state: AuditState) -> dict:
 
     # 5. 发 payload（用 HttpClient.send，自动带 session cookies）+ 重试循环
     log.info("verify: 开始发送 %d 个 payload", len(findings))
-    codegraph_db = state.get("codegraph_db", "")
-    sources_root = state.get("sources_root", "")
+    project_path = state.get("sources_root", "")
+    explore_msgs: list[str] = list(state.get("explore_messages", []))
 
     for f in findings:
         if not f.payload:
@@ -569,23 +564,31 @@ def verify_finding(state: AuditState) -> dict:
             if verified:
                 break  # 验证成功
 
-            # 验证失败 + 还有重试次数 → 查 codegraph 源码 + 重构 payload
+            # 验证失败 + 还有重试次数 → 调 codegraph explore 探索 + 重构 payload
             if attempt < MAX_RETRIES - 1:
-                log.info("verify: payload 验证失败，查 codegraph 源码重构...")
-                print(f"\n--- 查 codegraph 源码重构 payload ---")
+                log.info("verify: payload 验证失败，调 codegraph explore 探索...")
+                print(f"\n--- 调 codegraph MCP 探索 ---")
+
+                # 用文件名提取类名作为探索 query
+                from pathlib import Path as _Path
+                class_name = _Path(f.file_path).stem  # e.g. "SqlInjectionLesson6a"
+                explore_query = f"{class_name} {f.vuln_type}"
+
+                # 调 codegraph explore CLI（返回调用链+源码+关系图）
+                exploration = codegraph_explore(explore_query, project_path)
+
+                # 保存探索消息到 state
+                explore_msgs.append(
+                    f"[attempt {attempt+1}] query={explore_query}\n{exploration[:2000]}"
+                )
 
                 resp_detail = _format_response_detail(status, resp_headers, resp_body)
 
-                with CodegraphClient(codegraph_db) as cg:
-                    method_source = cg.get_node_body(sources_root, f.node_id)
-                    callees_source = cg.get_callee_bodies(sources_root, f.node_id)
-
                 corrected_payload, retry_reason = _ai_retry_payload(
-                    f, resp_detail, last_reasoning,
-                    method_source, callees_source,
+                    f, resp_detail, last_reasoning, exploration,
                 )
                 f.payload = corrected_payload
-                log.info("verify: payload 已重构，重试...")
+                log.info("verify: payload 已重构（基于 codegraph 探索），重试...")
 
         # 更新 finding
         verdict = "confirmed" if verified else "denied"
@@ -598,4 +601,4 @@ def verify_finding(state: AuditState) -> dict:
     denied = sum(1 for f in findings if f.poc_result == "denied")
     log.info("verify: 完成 → %d confirmed, %d denied, %d inconclusive",
              confirmed, denied, len(findings) - confirmed - denied)
-    return {"findings": findings}
+    return {"findings": findings, "explore_messages": explore_msgs}

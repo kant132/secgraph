@@ -162,3 +162,4 @@ class AuditState(TypedDict, total=False):
     verified: list[Finding]            # verified vulns -> .md
     reflection_notes: list[str]
     iteration: int
+    explore_messages: list[str]       # codegraph 探索消息（retry 循环中积累）
