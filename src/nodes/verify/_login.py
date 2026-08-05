@@ -60,7 +60,7 @@ def write_login_info(project_path: str, info: dict) -> None:
 # Playwright CDP + AI 探索（一个 adapter）
 # ---------------------------------------------------------------------------
 
-_LOGIN_TEMPLATE = Path(__file__).with_name("..").parent.parent / "prompts" / "login_exploration_template.md"
+_LOGIN_TEMPLATE = Path(__file__).parent.parent.parent / "prompts" / "login_exploration_template.md"
 _LOGIN_TEMPLATE = _LOGIN_TEMPLATE.resolve()
 
 

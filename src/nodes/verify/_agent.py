@@ -20,7 +20,7 @@ from ...tools.http_client import HttpClient
 
 log = logging.getLogger("secgraph.verify.agent")
 
-_AGENT_PROMPT = Path(__file__).with_name("..").parent.parent / "prompts" / "agent_system_prompt.md"
+_AGENT_PROMPT = Path(__file__).parent.parent.parent / "prompts" / "agent_system_prompt.md"
 _AGENT_PROMPT = _AGENT_PROMPT.resolve()
 
 MAX_AGENT_ITERS = 10

@@ -14,7 +14,7 @@ from ...tools.http_client import SKIP_HEADERS
 
 log = logging.getLogger("secgraph.verify.payload")
 
-_VERIFY_TEMPLATE = Path(__file__).with_name("..").parent.parent / "prompts" / "poc_verification_template.md"
+_VERIFY_TEMPLATE = Path(__file__).parent.parent.parent / "prompts" / "poc_verification_template.md"
 _VERIFY_TEMPLATE = _VERIFY_TEMPLATE.resolve()
 
 
