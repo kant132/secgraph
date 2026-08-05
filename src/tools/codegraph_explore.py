@@ -12,7 +12,7 @@ import subprocess
 log = logging.getLogger("secgraph.explore")
 
 
-def codegraph_explore(query: str, project_path: str, timeout: int = 30) -> str:
+def codegraph_explore(query: str, project_path: str, timeout: int = 60) -> str:
     """调用 codegraph explore CLI，返回探索结果。
 
     返回内容：
