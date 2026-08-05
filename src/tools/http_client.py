@@ -149,8 +149,8 @@ class HttpClient:
             print(f"  Headers:")
             for k, v in resp_headers.items():
                 print(f"    {k}: {v}")
-            print(f"  Body (前500字):")
-            print(f"    {resp.text[:500]}")
+            print(f"  Body:")
+            print(f"    {resp.text}")
             print(f"{'='*60}")
 
             log.info("http: 响应 → status=%d len=%d", resp.status_code, len(resp.text))

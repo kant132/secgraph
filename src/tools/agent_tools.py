@@ -56,7 +56,7 @@ def create_agent_tools(project_path: str, http_client: HttpClient):
         return (
             f"HTTP {status}\n"
             f"Headers: {json.dumps(resp_headers, ensure_ascii=False)}\n"
-            f"Body: {resp_body[:2000]}"
+            f"Body: {resp_body}"
         )
 
     @tool

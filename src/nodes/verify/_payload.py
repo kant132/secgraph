@@ -94,8 +94,8 @@ def format_response_detail(status: int, headers: dict, body: str) -> str:
         for k, v in headers.items():
             lines.append(f"  {k}: {v}")
     if body:
-        lines.append(f"Body (前1000字):")
-        lines.append(body[:1000])
+        lines.append(f"Body:")
+        lines.append(body)
     return "\n".join(lines)
 
 
@@ -148,8 +148,8 @@ def send_payload(http_client, target_url: str, finding: Finding) -> tuple | None
         print(f"  Headers:")
         for k, v in resp_headers.items():
             print(f"    {k}: {v}")
-        print(f"  Body (前500字):")
-        print(f"    {resp.text[:500]}")
+        print(f"  Body:")
+        print(f"    {resp.text}")
         print(f"{'='*60}")
 
         log.info("verify: 响应 → status=%d len=%d", resp.status_code, len(resp.text))
