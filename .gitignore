@@ -1,0 +1,10 @@
+.env
+secgraph.db
+secgraph.db-*
+findings/
+logs/
+.venv/
+__pycache__/
+*.pyc
+.omo/
+.idea/
