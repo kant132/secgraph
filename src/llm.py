@@ -15,16 +15,20 @@ import os
 
 from langchain_openai import ChatOpenAI
 
-from .state import AuditResult, LoginExplorationResult, PoCVerificationResult, PayloadRetryResult, ReachabilityResult
+from .state import (
+    AuditResult, LoginExplorationResult, PoCVerificationResult,
+    PayloadRetryResult, ReachabilityResult, SupervisorDecision,
+)
 
 log = logging.getLogger("secgraph.llm")
 
-_raw_llm = None       # 缓存：ChatOpenAI（无结构化输出）
-_audit_llm = None     # 缓存：with_structured_output(AuditResult)
-_reach_llm = None     # 缓存：with_structured_output(ReachabilityResult)
-_explore_llm = None   # 缓存：with_structured_output(LoginExplorationResult)
-_verify_llm = None    # 缓存：with_structured_output(PoCVerificationResult)
-_retry_llm = None     # 缓存：with_structured_output(PayloadRetryResult)
+_raw_llm = None
+_audit_llm = None
+_reach_llm = None
+_explore_llm = None
+_verify_llm = None
+_retry_llm = None
+_supervisor_llm = None
 
 
 def _get_raw_llm() -> ChatOpenAI:
@@ -103,6 +107,19 @@ def get_retry_llm():
 def call_retry_llm(prompt: str) -> PayloadRetryResult:
     """结构化 payload 重构调用 — 返回 PayloadRetryResult。"""
     return get_retry_llm().invoke(prompt)
+
+
+def get_supervisor_llm():
+    """返回缓存的 supervisor 路由 LLM（绑定 SupervisorDecision schema）。"""
+    global _supervisor_llm
+    if _supervisor_llm is None:
+        _supervisor_llm = _get_raw_llm().with_structured_output(SupervisorDecision)
+    return _supervisor_llm
+
+
+def call_supervisor_llm(prompt: str) -> SupervisorDecision:
+    """Supervisor 路由调用 — 返回 SupervisorDecision（next_agent + reasoning）。"""
+    return get_supervisor_llm().invoke(prompt)
 
 
 def call_llm(prompt: str) -> str:

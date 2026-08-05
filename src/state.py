@@ -139,6 +139,12 @@ class PayloadRetryResult(BaseModel):
     reasoning: str = Field(description="原 payload 失败原因 + 新 payload 如何修正（列数、表名等）")
 
 
+class SupervisorDecision(BaseModel):
+    """Supervisor 路由决策 — 根据当前 state 决定下一步派给哪个子agent。"""
+    next_agent: str = Field(description="下一步派给哪个子agent: discovery | trace | verify | FINISH")
+    reasoning: str = Field(description="为什么派给这个 agent（当前状态分析）")
+
+
 # ---------------------------------------------------------------------------
 # LangGraph state  (TypedDict — passed between nodes, merged by the graph)
 # ---------------------------------------------------------------------------
@@ -165,5 +171,7 @@ class AuditState(TypedDict, total=False):
     verified: list[Finding]            # verified vulns -> .md
     reflection_notes: list[str]
     iteration: int
-    # explore_messages / agent_messages 不进 state — 由 verify 节点写到
-    # {project_path}/verify_history.json（运行历史 ≠ 决策，不污染 schema）
+    explore_messages: list[str]       # codegraph 探索消息（已移除，写文件）
+    # Supervisor 模式专用
+    agent_history: list[dict]         # supervisor + 子agent 对话历史
+    next_agent: str                   # supervisor 分配的下一个子agent
