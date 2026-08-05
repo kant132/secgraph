@@ -28,8 +28,19 @@
 - 失败原因（如：UNION 列数不匹配、表名错误、参数格式不对等）
 - 需要什么额外信息才能构造正确的 payload（如：SQL 查询的列数、表结构、参数格式等）
 
+## CIA 证明要求
+必须基于 PoC 的实际结果（不是代码分析）说明 CIA 影响：
+- C（机密性）：PoC 是否取回了敏感数据原文？什么数据？
+- I（完整性）：PoC 是否造成了未授权的数据改写？改了什么？
+- A（可用性）：PoC 是否造成了未授权的数据删除/销毁？
+如果当前 payload 无法证明 CIA，或可以进一步利用造成更大影响，必须在 second_payload 中生成新的 payload。
+
 ## 输出格式（严格 JSON，无多余文本）
 {
   "verified": true | false,
-  "reasoning": "<判断依据 + 失败原因 + 需要什么信息>"
+  "cvss_score": "CVSS 3.1 打分，如 9.8 Critical",
+  "cia_proof": "基于 PoC 实际结果的 CIA 证明，实事求是",
+  "reasoning": "<判断依据 + 失败原因 + 需要什么信息>",
+  "second_payload": ""
 }
+

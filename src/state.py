@@ -125,9 +125,12 @@ class LoginExplorationResult(BaseModel):
 
 
 class PoCVerificationResult(BaseModel):
-    """AI 判断 PoC 验证结果。"""
+    """AI 判断 PoC 验证结果 + CIA 证明 + CVSS 打分。"""
     verified: bool = Field(description="漏洞是否验证成功（payload 是否触发了漏洞）")
-    reasoning: str = Field(description="判断依据：响应中哪些特征表明漏洞被触发或未被触发")
+    cvss_score: str = Field(description="CVSS 3.1 打分，如 '9.8 Critical' 或 '7.5 High'")
+    cia_proof: str = Field(description="CIA 证明：基于 PoC 实际结果说明 C/I/A 影响。必须实事求是，基于结果而非代码分析。如果无法证明或可进一步利用造成更大影响，必须如实反馈")
+    reasoning: str = Field(description="判断依据 + 失败原因 + 需要什么信息")
+    second_payload: str = Field(default="", description="如果可以进一步利用造成更大影响，生成新的 payload；否则为空")
 
 
 class PayloadRetryResult(BaseModel):

@@ -411,8 +411,9 @@ def _send_payload(session, target_url: str, finding: Finding) -> tuple | None:
 
 def _ai_verify(finding: Finding, req_method: str, req_url: str,
                req_headers: dict, req_body: str,
-               status: int, resp_headers: dict, resp_body: str) -> tuple[bool, str]:
-    """发请求+响应给 AI 判断漏洞是否验证成功。"""
+               status: int, resp_headers: dict, resp_body: str) -> tuple[bool, str, str, str]:
+    """发请求+响应给 AI 判断漏洞是否验证成功。
+    返回 (verified, reasoning, cvss_score, second_payload)。"""
     req_detail = _format_request_detail(req_method, req_url, req_headers, req_body)
     resp_detail = _format_response_detail(status, resp_headers, resp_body)
 
@@ -430,10 +431,21 @@ def _ai_verify(finding: Finding, req_method: str, req_url: str,
     print(f"发送 AI 验证判断...")
     result = call_verification_llm(prompt)
     print(f"  verified: {result.verified}")
+    print(f"  CVSS: {result.cvss_score}")
+    print(f"  CIA证明: {result.cia_proof}")
     print(f"  reasoning: {result.reasoning}")
+    if result.second_payload:
+        print(f"  second_payload: {result.second_payload[:120]}")
     print(f"{'='*60}")
 
-    return result.verified, result.reasoning
+    # 更新 finding 的严重等级为 CVSS 打分
+    finding.severity = result.cvss_score
+
+    # CIA 证明追加到 evidence
+    if result.cia_proof:
+        finding.evidence += f"\n\n[CIA 证明] {result.cia_proof}"
+
+    return result.verified, result.reasoning, result.cvss_score, result.second_payload
 
 
 def _run_agent(finding: Finding, project_path: str, http_client: HttpClient,
@@ -625,12 +637,16 @@ def verify_finding(state: AuditState) -> dict:
         if tool.session and tool.session.cookies:
             actual_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in tool.session.cookies.items())
 
-        verified, reasoning = _ai_verify(
+        verified, reasoning, cvss_score, second_payload = _ai_verify(
             f, method, url, actual_headers, body or "",
             status, resp_headers, resp_body,
         )
 
-        if verified:
+        if second_payload:
+            print(f"\n--- AI 生成 second_payload，更新 ---")
+            f.payload = second_payload
+
+        if verified and not second_payload:
             f.poc_result = "confirmed"
             f.poc_output = f"AI: {reasoning}"
             log.info("verify: %s → CONFIRMED（初始 payload）", f.node_id[:30])
