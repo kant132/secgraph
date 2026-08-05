@@ -28,7 +28,7 @@ class CodegraphClient:
 
     def list_entry_methods(self, pkg_prefix: str, limit: int | None = None) -> list[MethodNode]:
         """Q1 — 业务包内的 public 带参方法（入口方法），返回 nodeid 列表。
-        limit 按 file_path 去重后切片（dev 态限 10 个文件）。"""
+        limit 按 method 数切片（dev 态限 10 个方法）。"""
         pattern = f"%{pkg_prefix}%"
         rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
         methods = [
@@ -44,16 +44,7 @@ class CodegraphClient:
             for r in rows
         ]
         if limit is not None:
-            # 按 file_path 去重计数，取前 limit 个文件的方法
-            seen: set[str] = set()
-            limited: list[MethodNode] = []
-            for m in methods:
-                if m.file_path not in seen:
-                    if len(seen) >= limit:
-                        break
-                    seen.add(m.file_path)
-                limited.append(m)
-            methods = limited
+            methods = methods[:limit]
         return methods
 
     # ---- Q2: 调用边（按 nodeid，多行） -----------------------------------
@@ -101,13 +92,13 @@ class CodegraphClient:
     @staticmethod
     def _read_method_body(sources_root: str, file_path: str,
                           start_line: int, end_line: int, qualified_name: str) -> str:
-        """读源码 [start_line, end_line]，带行号，首行加 // qualified_name 注释。"""
+        """读源码 [start_line, end_line]，首行加 // qualified_name 注释。不加行号。"""
         full = Path(sources_root) / file_path
         if not full.exists():
             return f"// {qualified_name}\n[source not found: {full}]"
         lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
         snippet = lines[start_line - 1:end_line]  # 0-indexed 切片
-        body = "".join(f"{start_line + i}: {line}\n" for i, line in enumerate(snippet))
+        body = "".join(f"{line}\n" for line in snippet)
         return f"// {qualified_name}\n{body}"
 
     def get_method_body(self, sources_root: str, method: MethodNode) -> str:
@@ -160,6 +151,18 @@ class CodegraphClient:
                     sources_root, row["file_path"],
                     row["start_line"], row["end_line"], row["qualified_name"])
         return result
+
+    def get_node_body(self, sources_root: str, node_id: str) -> str:
+        """按 nodeid 取单个节点的源码体。"""
+        row = self._conn.execute(
+            "SELECT qualified_name, file_path, start_line, end_line FROM nodes WHERE id = ?",
+            (node_id,),
+        ).fetchone()
+        if row:
+            return self._read_method_body(
+                sources_root, row["file_path"],
+                row["start_line"], row["end_line"], row["qualified_name"])
+        return f"[node not found: {node_id}]"
 
     # ---- 生命周期 --------------------------------------------------------
 

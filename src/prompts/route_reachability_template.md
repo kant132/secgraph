@@ -1,4 +1,4 @@
-你是 Java 安全审计专家。判断以下漏洞是否能从 HTTP 路由到达，并更新 payload。
+你是 Java 安全审计专家。判断以下漏洞是否能从 HTTP 路由到达，并更新 payload，让payload的参数满足业务要求
 
 ## 漏洞信息
 - 漏洞类型: {vuln_type}

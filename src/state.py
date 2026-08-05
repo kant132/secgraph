@@ -57,11 +57,12 @@ class CallEdge:
 
 @dataclass
 class FileAuditTask:
-    """Per-file audit unit. Filled by discover() from Q1-Q4, consumed by audit_file()."""
+    """单方法审计单元。每个 task 对应一个入口方法 + 其所有被调方法。"""
     file_path: str
-    fields: list[FieldNode]                                  # Q3 scoped to this file
-    method_bodies: dict[str, str] = field(default_factory=dict)   # {nodeid: "// fqn\nbody"} — Q1
-    calls: dict[str, str] = field(default_factory=dict)          # {callee_nodeid: "// fqn\nbody"} — Q4
+    node_id: str                                              # 本 task 入口方法 nodeid
+    fields: list[FieldNode]                                   # 同文件字段
+    method_bodies: dict[str, str] = field(default_factory=dict)  # {nodeid: body} — 仅 1 个
+    calls: dict[str, str] = field(default_factory=dict)          # {callee_nodeid: body} — 该方法所有 callees
 
 
 @dataclass
@@ -105,6 +106,34 @@ class ReachabilityResult(BaseModel):
     updated_payload: str = Field(default="", description="更新后的 payload（包含完整 HTTP 请求）")
     conditions: str = Field(description="触发条件：需要什么参数/认证/路径才能到达漏洞")
     confidence: float = Field(description="更新后的置信度 0.1-1")
+
+
+class LoginStep(BaseModel):
+    """AI 分析页面后给出的单步操作。"""
+    action: str = Field(description="操作: fill(填表) | click(点击) | navigate(跳转) | wait(等待)")
+    selector: str = Field(default="", description="CSS 选择器（fill/click 用）")
+    value: str = Field(default="", description="填写值（fill）或 URL（navigate）")
+
+
+class LoginExplorationResult(BaseModel):
+    """AI 分析页面后的登录探索结果。"""
+    steps: list[LoginStep] = Field(description="登录步骤列表，按顺序执行")
+    login_url: str = Field(description="登录提交的目标 URL")
+    login_method: str = Field(description="HTTP 方法: GET | POST")
+    login_body: str = Field(default="", description="请求体（表单数据，如 username=guest&password=guest）")
+    description: str = Field(description="页面分析说明")
+
+
+class PoCVerificationResult(BaseModel):
+    """AI 判断 PoC 验证结果。"""
+    verified: bool = Field(description="漏洞是否验证成功（payload 是否触发了漏洞）")
+    reasoning: str = Field(description="判断依据：响应中哪些特征表明漏洞被触发或未被触发")
+
+
+class PayloadRetryResult(BaseModel):
+    """AI 根据源码重构 payload 的结果。"""
+    corrected_payload: str = Field(description="修正后的完整 HTTP 请求 payload")
+    reasoning: str = Field(description="原 payload 失败原因 + 新 payload 如何修正（列数、表名等）")
 
 
 # ---------------------------------------------------------------------------

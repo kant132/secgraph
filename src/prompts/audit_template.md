@@ -33,7 +33,7 @@
       "vuln_type": "SQLi|SSRF|deser|path-traversal|XXE|expression-injection|RCE|XSS|JNDI|LDAP-injection|XPath-injection",
       "severity": "critical|high|medium|low|unknown",
       "evidence": "<行号 + 漏洞根因（污点或逻辑哪里有问题）+ 构造漏洞参数或逻辑需要满足的可达条件（污点或逻辑分析）,如果unknown无法确定，说明可能还需要什么信息>",
-      "payload": "有漏洞给出payload，没有为空",
+      "payload": "有漏洞给出payload（真实满足业务要求），没有为空",
       "confidence": "0.1-1"
     }
   }

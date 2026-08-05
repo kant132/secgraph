@@ -72,7 +72,7 @@ class Config:
 
     @property
     def file_limit(self) -> int | None:
-        return 10 if self.mode == "dev" else None
+        return 2 if self.mode == "dev" else None
 
     @classmethod
     def from_args(cls, project_path: str, group_id: str, mode: str = "dev") -> "Config":

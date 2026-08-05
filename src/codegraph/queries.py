@@ -27,6 +27,7 @@ WHERE kind = 'method'
   AND language = 'java'
   AND signature NOT GLOB '*()'
   AND file_path LIKE :pkg_pattern
+  and  qualified_name like '%injectableQuery%'
 ORDER BY file_path, start_line
 """
 
