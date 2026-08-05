@@ -22,13 +22,17 @@ class FileTool:
 
     @staticmethod
     def read(file_path: str, encoding: str = "utf-8") -> str | None:
-        """读文件，返回内容。文件不存在返回 None。"""
+        """读文件，返回内容。文件不存在或路径是目录返回 None。"""
         p = Path(file_path)
         print(f"\n[工具调用] read()")
         print(f"  path: {file_path}")
         if not p.exists():
             print(f"  → 文件不存在")
             log.warning("file: read → %s 不存在", file_path)
+            return None
+        if p.is_dir():
+            print(f"  → 是目录不是文件，用 explore_code 探索代码")
+            log.warning("file: read → %s 是目录", file_path)
             return None
         text = p.read_text(encoding=encoding)
         print(f"  → 读取 {len(text)} 字符")
