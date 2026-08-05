@@ -586,10 +586,11 @@ def verify_finding(state: AuditState) -> dict:
             f.poc_output = "[login failed]"
         return {"findings": findings}
 
-    # 5. 发初始 payload + AI 验证，失败则启动 agent 循环
-    log.info("verify: 开始发送 %d 个 payload", len(findings))
+    # 5. 第一轮：顺序发初始 payload + AI 验证
+    log.info("verify: 第一轮 — 发送 %d 个初始 payload", len(findings))
     explore_msgs: list[str] = list(state.get("explore_messages", []))
     agent_msgs_all: list[dict] = []
+    need_agent: list[Finding] = []  # 初始验证失败的，需要 agent 进一步探索
 
     for f in findings:
         if not f.payload:
@@ -598,10 +599,9 @@ def verify_finding(state: AuditState) -> dict:
             continue
 
         print(f"\n{'#'*60}")
-        print(f"# PoC: {f.vuln_type} — {f.node_id[:30]}")
+        print(f"# 初始 PoC: {f.vuln_type} — {f.node_id[:30]}")
         print(f"{'#'*60}")
 
-        # 发初始 payload
         parsed = _parse_payload(f.payload or "")
         if not parsed.get("path"):
             f.poc_result = "inconclusive"
@@ -621,7 +621,6 @@ def verify_finding(state: AuditState) -> dict:
 
         status, resp_headers, resp_body = result
 
-        # AI 验证
         actual_headers = {k: v for k, v in headers.items() if k.lower() not in SKIP_HEADERS}
         if tool.session and tool.session.cookies:
             actual_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in tool.session.cookies.items())
@@ -631,23 +630,51 @@ def verify_finding(state: AuditState) -> dict:
             status, resp_headers, resp_body,
         )
 
-        if not verified:
-            # 初始 payload 失败 → 启动 agent 循环（AI 自由调 explore_code + send_http）
-            log.info("verify: 初始 payload 失败，启动 agent 循环（AI 自主探索+测试）...")
-            verified, agent_reasoning, updated_payload, agent_msgs = _run_agent(
-                f, project_path, tool, target_url, explore_msgs,
-            )
-            reasoning = agent_reasoning
-            if updated_payload and updated_payload != f.payload:
-                f.payload = updated_payload
-            agent_msgs_all.extend(agent_msgs)
+        if verified:
+            f.poc_result = "confirmed"
+            f.poc_output = f"AI: {reasoning}"
+            log.info("verify: %s → CONFIRMED（初始 payload）", f.node_id[:30])
+        else:
+            log.info("verify: %s → 初始失败，待 agent 循环", f.node_id[:30])
+            need_agent.append(f)
 
-        # 更新 finding
-        verdict = "confirmed" if verified else "denied"
-        f.poc = f.payload[:200]
-        f.poc_result = verdict
-        f.poc_output = f"AI: {reasoning}"
-        log.info("verify: %s → %s (%s)", f.node_id[:30], verdict.upper(), reasoning[:80])
+    # 6. 第二轮：并发 agent 循环（并发度=3，每个 agent 独立 session）
+    if need_agent:
+        log.info("verify: 第二轮 — %d 个 finding 启动 agent 循环（并发度=3）", len(need_agent))
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _run_one_agent(f: Finding) -> tuple[str, bool, str, str, list[str], list[dict]]:
+            """单个 finding 的 agent 循环（独立 session，线程安全）。"""
+            # 每个 agent 独立登录（避免 session 共享）
+            agent_tool = HttpClient(login_info)
+            agent_tool.login()
+            agent_explore_msgs: list[str] = []
+
+            verified, agent_reasoning, updated_payload, agent_msgs = _run_agent(
+                f, project_path, agent_tool, target_url, agent_explore_msgs,
+            )
+            return f.node_id, verified, agent_reasoning, updated_payload, agent_explore_msgs, agent_msgs
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(_run_one_agent, f): f for f in need_agent}
+            for future in as_completed(futures):
+                f = futures[future]
+                try:
+                    nid, verified, reasoning, updated_payload, a_explore_msgs, a_agent_msgs = future.result()
+                except Exception as e:
+                    log.warning("verify: agent %s 异常 → %s", f.node_id[:30], e)
+                    f.poc_result = "inconclusive"
+                    f.poc_output = f"[agent error: {e}]"
+                    continue
+
+                if updated_payload and updated_payload != f.payload:
+                    f.payload = updated_payload
+                f.poc_result = "confirmed" if verified else "denied"
+                f.poc_output = f"AI: {reasoning}"
+                explore_msgs.extend(a_explore_msgs)
+                agent_msgs_all.extend(a_agent_msgs)
+                log.info("verify: %s → %s (agent)", nid[:30], f.poc_result.upper())
 
     confirmed = sum(1 for f in findings if f.poc_result == "confirmed")
     denied = sum(1 for f in findings if f.poc_result == "denied")
