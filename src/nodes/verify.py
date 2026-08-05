@@ -18,8 +18,9 @@ import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from ..llm import call_exploration_llm, call_retry_llm, call_verification_llm
+from ..llm import call_exploration_llm, call_verification_llm
 from ..state import AuditState, Finding
+from ..tools.agent_tools import create_agent_tools
 from ..tools.codegraph_explore import codegraph_explore
 from ..tools.http_client import HttpClient, SKIP_HEADERS
 
@@ -31,8 +32,11 @@ _VERIFY_TEMPLATE = Path(__file__).with_name("..") / "prompts" / "poc_verificatio
 _VERIFY_TEMPLATE = _VERIFY_TEMPLATE.resolve()
 _RETRY_TEMPLATE = Path(__file__).with_name("..") / "prompts" / "payload_retry_template.md"
 _RETRY_TEMPLATE = _RETRY_TEMPLATE.resolve()
+_AGENT_PROMPT = Path(__file__).with_name("..") / "prompts" / "agent_system_prompt.md"
+_AGENT_PROMPT = _AGENT_PROMPT.resolve()
 
 MAX_RETRIES = 3
+MAX_AGENT_ITERS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -432,30 +436,105 @@ def _ai_verify(finding: Finding, req_method: str, req_url: str,
     return result.verified, result.reasoning
 
 
-def _ai_retry_payload(finding: Finding, response_detail: str, failure_reason: str,
-                      exploration_result: str) -> tuple[str, str]:
-    """根据 codegraph 探索结果 + 失败响应，让 AI 重构 payload。"""
-    tmpl = _RETRY_TEMPLATE.read_text(encoding="utf-8")
-    prompt = (
-        tmpl
-        .replace("{vuln_type}", finding.vuln_type)
-        .replace("{original_payload}", finding.payload or "")
-        .replace("{response_detail}", response_detail)
-        .replace("{failure_reason}", failure_reason)
-        .replace("{exploration_result}", exploration_result)
+def _run_agent(finding: Finding, project_path: str, http_client: HttpClient,
+               target_url: str, explore_msgs: list[str]) -> tuple[bool, str, str, list[dict]]:
+    """AI agent 循环：自由调用 explore_code + send_http + read_file + write_file。
+
+    AI 自己决定：探索什么、构造什么 payload、怎么测试、什么时候停。
+    返回 (verified, reasoning, updated_payload, agent_messages)。
+    """
+    from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+    from ..llm import _get_raw_llm
+
+    # 创建工具（绑定到当前项目 + session）
+    tools = create_agent_tools(project_path, http_client)
+    tool_map = {t.name: t for t in tools}
+
+    # 绑定工具到 LLM
+    llm = _get_raw_llm().bind_tools(tools)
+
+    # 系统提示
+    system_prompt = _AGENT_PROMPT.read_text(encoding="utf-8")
+
+    # 用户消息
+    user_msg = (
+        f"## 漏洞信息\n"
+        f"- 类型: {finding.vuln_type}\n"
+        f"- 文件: {finding.file_path}\n"
+        f"- node_id: {finding.node_id}\n"
+        f"- 证据: {finding.evidence}\n"
+        f"- 初始 payload: {finding.payload}\n"
+        f"- 目标 URL: {target_url}\n\n"
+        f"请验证这个漏洞是否可利用。先用 explore_code 探索代码理解业务逻辑和成功条件，"
+        f"然后构造能真正成功的 payload 用 send_http 测试。"
     )
 
-    print(f"\n{'='*60}")
-    print(f"发送 AI payload 重构（基于 codegraph 探索）...")
-    result = call_retry_llm(prompt)
-    print(f"  corrected_payload: {result.corrected_payload[:120]}")
-    print(f"  reasoning: {result.reasoning}")
-    print(f"{'='*60}")
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_msg),
+    ]
 
-    return result.corrected_payload, result.reasoning
-    if status in (401, 403):
-        return "inconclusive"
-    return "inconclusive"
+    agent_msgs: list[dict] = []
+    final_text = ""
+    updated_payload = finding.payload
+
+    for i in range(MAX_AGENT_ITERS):
+        print(f"\n--- Agent 迭代 {i+1}/{MAX_AGENT_ITERS} ---")
+        response = llm.invoke(messages)
+        messages.append(response)
+
+        if not response.tool_calls:
+            final_text = response.content or ""
+            print(f"  → Agent 完成: {final_text[:200]}")
+            agent_msgs.append({"iter": i + 1, "type": "final", "content": final_text[:500]})
+            break
+
+        # 执行工具调用
+        for call in response.tool_calls:
+            tool_name = call["name"]
+            tool_args = call["args"]
+            tool_id = call["id"]
+
+            print(f"  → 调工具: {tool_name}({str(tool_args)[:120]})")
+
+            # 保存探索消息
+            if tool_name == "explore_code":
+                explore_msgs.append(f"[agent iter {i+1}] query={tool_args.get('query','')}")
+
+            tool = tool_map.get(tool_name)
+            if tool:
+                result = tool.invoke(tool_args)
+            else:
+                result = f"[未知工具: {tool_name}]"
+
+            result_str = str(result)
+            print(f"  → 结果({len(result_str)}字): {result_str[:200]}")
+
+            # 记录最后一次 send_http 的 payload
+            if tool_name == "send_http":
+                body = tool_args.get("body", "")
+                url = tool_args.get("url", "")
+                method = tool_args.get("method", "POST")
+                if body:
+                    updated_payload = f"{method} {url}\n\n{body}"
+
+            messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+            agent_msgs.append({
+                "iter": i + 1,
+                "tool": tool_name,
+                "args": str(tool_args)[:300],
+                "result": result_str[:500],
+            })
+    else:
+        final_text = "达到最大迭代数，未能确认"
+        agent_msgs.append({"iter": MAX_AGENT_ITERS, "type": "max_iters"})
+
+    # 判断是否 confirmed
+    verified = any(kw in final_text.lower() for kw in ("confirmed", "可利用", "已确认", "verified", "成功"))
+    if not verified:
+        verified = any(kw in final_text.lower() for kw in ("数据泄露", "数据返回", "成功执行", "绕过"))
+
+    return verified, final_text, updated_payload, agent_msgs
 
 
 # ---------------------------------------------------------------------------
@@ -507,10 +586,10 @@ def verify_finding(state: AuditState) -> dict:
             f.poc_output = "[login failed]"
         return {"findings": findings}
 
-    # 5. 发 payload（用 HttpClient.send，自动带 session cookies）+ 重试循环
+    # 5. 发初始 payload + AI 验证，失败则启动 agent 循环
     log.info("verify: 开始发送 %d 个 payload", len(findings))
-    project_path = state.get("sources_root", "")
     explore_msgs: list[str] = list(state.get("explore_messages", []))
+    agent_msgs_all: list[dict] = []
 
     for f in findings:
         if not f.payload:
@@ -522,83 +601,56 @@ def verify_finding(state: AuditState) -> dict:
         print(f"# PoC: {f.vuln_type} — {f.node_id[:30]}")
         print(f"{'#'*60}")
 
-        verified = False
-        last_reasoning = ""
-        status = 0
-        resp_body = ""
+        # 发初始 payload
+        parsed = _parse_payload(f.payload or "")
+        if not parsed.get("path"):
+            f.poc_result = "inconclusive"
+            f.poc_output = "[payload parse failed]"
+            continue
 
-        for attempt in range(MAX_RETRIES):
-            print(f"\n--- 尝试 {attempt+1}/{MAX_RETRIES} ---")
+        url = urljoin(target_url + "/", parsed["path"].lstrip("/"))
+        method = parsed["method"]
+        body = parsed.get("body")
+        headers = parsed.get("headers", {})
 
-            # 解析 payload
-            parsed = _parse_payload(f.payload or "")
-            if not parsed.get("path"):
-                f.poc_result = "inconclusive"
-                f.poc_output = "[payload parse failed]"
-                break
+        result = tool.send(method=method, url=url, body=body, headers=headers)
+        if result is None:
+            f.poc_result = "inconclusive"
+            f.poc_output = "[request failed]"
+            continue
 
-            url = urljoin(target_url + "/", parsed["path"].lstrip("/"))
-            method = parsed["method"]
-            body = parsed.get("body")
-            headers = parsed.get("headers", {})
+        status, resp_headers, resp_body = result
 
-            # 发请求
-            result = tool.send(method=method, url=url, body=body, headers=headers)
-            if result is None:
-                f.poc_result = "inconclusive"
-                f.poc_output = "[request failed]"
-                break
+        # AI 验证
+        actual_headers = {k: v for k, v in headers.items() if k.lower() not in SKIP_HEADERS}
+        if tool.session and tool.session.cookies:
+            actual_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in tool.session.cookies.items())
 
-            status, resp_headers, resp_body = result
+        verified, reasoning = _ai_verify(
+            f, method, url, actual_headers, body or "",
+            status, resp_headers, resp_body,
+        )
 
-            # AI 验证
-            actual_headers = {k: v for k, v in headers.items() if k.lower() not in SKIP_HEADERS}
-            if tool.session and tool.session.cookies:
-                actual_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in tool.session.cookies.items())
-
-            verified, last_reasoning = _ai_verify(
-                f, method, url, actual_headers, body or "",
-                status, resp_headers, resp_body,
+        if not verified:
+            # 初始 payload 失败 → 启动 agent 循环（AI 自由调 explore_code + send_http）
+            log.info("verify: 初始 payload 失败，启动 agent 循环（AI 自主探索+测试）...")
+            verified, agent_reasoning, updated_payload, agent_msgs = _run_agent(
+                f, project_path, tool, target_url, explore_msgs,
             )
-
-            if verified:
-                break  # 验证成功
-
-            # 验证失败 + 还有重试次数 → 调 codegraph explore 探索 + 重构 payload
-            if attempt < MAX_RETRIES - 1:
-                log.info("verify: payload 验证失败，调 codegraph explore 探索...")
-                print(f"\n--- 调 codegraph MCP 探索 ---")
-
-                # 用文件名提取类名作为探索 query
-                from pathlib import Path as _Path
-                class_name = _Path(f.file_path).stem  # e.g. "SqlInjectionLesson6a"
-                explore_query = f"{class_name} {f.vuln_type}"
-
-                # 调 codegraph explore CLI（返回调用链+源码+关系图）
-                exploration = codegraph_explore(explore_query, project_path)
-
-                # 保存探索消息到 state
-                explore_msgs.append(
-                    f"[attempt {attempt+1}] query={explore_query}\n{exploration[:2000]}"
-                )
-
-                resp_detail = _format_response_detail(status, resp_headers, resp_body)
-
-                corrected_payload, retry_reason = _ai_retry_payload(
-                    f, resp_detail, last_reasoning, exploration,
-                )
-                f.payload = corrected_payload
-                log.info("verify: payload 已重构（基于 codegraph 探索），重试...")
+            reasoning = agent_reasoning
+            if updated_payload and updated_payload != f.payload:
+                f.payload = updated_payload
+            agent_msgs_all.extend(agent_msgs)
 
         # 更新 finding
         verdict = "confirmed" if verified else "denied"
         f.poc = f.payload[:200]
         f.poc_result = verdict
-        f.poc_output = f"HTTP {status}\nAI: {last_reasoning}\n\n{resp_body[:300]}"
-        log.info("verify: %s → %s (%s)", f.node_id[:30], verdict.upper(), last_reasoning[:80])
+        f.poc_output = f"AI: {reasoning}"
+        log.info("verify: %s → %s (%s)", f.node_id[:30], verdict.upper(), reasoning[:80])
 
     confirmed = sum(1 for f in findings if f.poc_result == "confirmed")
     denied = sum(1 for f in findings if f.poc_result == "denied")
     log.info("verify: 完成 → %d confirmed, %d denied, %d inconclusive",
              confirmed, denied, len(findings) - confirmed - denied)
-    return {"findings": findings, "explore_messages": explore_msgs}
+    return {"findings": findings, "explore_messages": explore_msgs, "agent_messages": agent_msgs_all}
