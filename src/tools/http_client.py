@@ -144,13 +144,17 @@ class HttpClient:
 
             resp_headers = dict(resp.headers)
 
-            # 打印响应
+            # 打印响应（Windows 控制台 GBK 兼容）
+            safe_body = resp.text
             print(f"\n  → HTTP {resp.status_code}")
             print(f"  Headers:")
             for k, v in resp_headers.items():
                 print(f"    {k}: {v}")
             print(f"  Body:")
-            print(f"    {resp.text}")
+            try:
+                print(f"    {safe_body}")
+            except UnicodeEncodeError:
+                print(f"    {safe_body.encode('utf-8', errors='replace').decode('utf-8', errors='replace')}")
             print(f"{'='*60}")
 
             log.info("http: 响应 → status=%d len=%d", resp.status_code, len(resp.text))

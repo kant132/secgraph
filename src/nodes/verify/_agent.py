@@ -43,7 +43,7 @@ def run_agent(finding: Finding, project_path: str, http_client: HttpClient,
     # 2. 创建 LangGraph ReAct agent
     llm = _get_raw_llm()
     agent_graph = create_react_agent(llm, tools, version="v2")
-    log.info("agent: LangGraph create_react_agent 创建完成（version=v2）")
+    log.info("agent: LangGraph create_react_agent 创建完成（version=v2, recursion_limit=25）")
 
     # 3. 系统提示
     system_prompt = _AGENT_PROMPT.read_text(encoding="utf-8")
@@ -59,20 +59,25 @@ def run_agent(finding: Finding, project_path: str, http_client: HttpClient,
         f"- 目标 URL: {target_url}\n\n"
         f"请验证这个漏洞是否可利用。先用 explore_code 探索代码理解业务逻辑和成功条件，"
         f"然后构造能真正成功的 payload 用 send_http 测试。"
+        f"如果 send_http 返回登录页（session 失效），不要重复登录，"
+        f"说明 session 失效并结束分析。"
     )
 
-    # 5. 调用 agent 子图
+    # 5. 调用 agent 子图（显式 recursion_limit 防死循环）
     print(f"\n{'='*60}")
     print(f"启动 LangGraph ReAct agent 子图...")
     print(f"{'='*60}")
 
     try:
-        result = agent_graph.invoke({
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-            ]
-        })
+        result = agent_graph.invoke(
+            {
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg},
+                ]
+            },
+            {"recursion_limit": 25},
+        )
     except Exception as e:
         log.warning("agent: 子图执行失败 → %s", e)
         return False, f"agent error: {e}", finding.payload, []
