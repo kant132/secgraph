@@ -598,11 +598,12 @@ def verify_finding(state: AuditState) -> dict:
             f.poc_output = "[login failed]"
         return {"findings": findings}
 
-    # 5. 第一轮：顺序发初始 payload + AI 验证
+    # 5. 第一轮：顺序发初始 payload + AI 验证 + second_payload 循环
     log.info("verify: 第一轮 — 发送 %d 个初始 payload", len(findings))
     explore_msgs: list[str] = list(state.get("explore_messages", []))
     agent_msgs_all: list[dict] = []
-    need_agent: list[Finding] = []  # 初始验证失败的，需要 agent 进一步探索
+    need_agent: list[Finding] = []
+    MAX_PAYLOAD_ROUNDS = 3  # second_payload 最多循环 3 次
 
     for f in findings:
         if not f.payload:
@@ -614,44 +615,58 @@ def verify_finding(state: AuditState) -> dict:
         print(f"# 初始 PoC: {f.vuln_type} — {f.node_id[:30]}")
         print(f"{'#'*60}")
 
-        parsed = _parse_payload(f.payload or "")
-        if not parsed.get("path"):
-            f.poc_result = "inconclusive"
-            f.poc_output = "[payload parse failed]"
-            continue
+        verified = False
+        reasoning = ""
+        second_payload = ""
 
-        url = urljoin(target_url + "/", parsed["path"].lstrip("/"))
-        method = parsed["method"]
-        body = parsed.get("body")
-        headers = parsed.get("headers", {})
+        for round_num in range(MAX_PAYLOAD_ROUNDS):
+            label = "初始" if round_num == 0 else f"second_payload({round_num})"
+            print(f"\n--- {label} ---")
 
-        result = tool.send(method=method, url=url, body=body, headers=headers)
-        if result is None:
-            f.poc_result = "inconclusive"
-            f.poc_output = "[request failed]"
-            continue
+            parsed = _parse_payload(f.payload or "")
+            if not parsed.get("path"):
+                f.poc_result = "inconclusive"
+                f.poc_output = "[payload parse failed]"
+                break
 
-        status, resp_headers, resp_body = result
+            url = urljoin(target_url + "/", parsed["path"].lstrip("/"))
+            method = parsed["method"]
+            body = parsed.get("body")
+            headers = parsed.get("headers", {})
 
-        actual_headers = {k: v for k, v in headers.items() if k.lower() not in SKIP_HEADERS}
-        if tool.session and tool.session.cookies:
-            actual_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in tool.session.cookies.items())
+            result = tool.send(method=method, url=url, body=body, headers=headers)
+            if result is None:
+                f.poc_result = "inconclusive"
+                f.poc_output = f"[{label} request failed]"
+                break
 
-        verified, reasoning, cvss_score, second_payload = _ai_verify(
-            f, method, url, actual_headers, body or "",
-            status, resp_headers, resp_body,
-        )
+            status, resp_headers, resp_body = result
 
-        if second_payload:
-            print(f"\n--- AI 生成 second_payload，更新 ---")
-            f.payload = second_payload
+            actual_headers = {k: v for k, v in headers.items() if k.lower() not in SKIP_HEADERS}
+            if tool.session and tool.session.cookies:
+                actual_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in tool.session.cookies.items())
 
+            verified, reasoning, cvss_score, second_payload = _ai_verify(
+                f, method, url, actual_headers, body or "",
+                status, resp_headers, resp_body,
+            )
+
+            # second_payload 有值 → 更新 payload，继续发送验证
+            if second_payload:
+                print(f"\n--- AI 生成 second_payload，发送验证 ---")
+                f.payload = second_payload
+                continue  # 继续下一轮
+
+            # 没有 second_payload → 这轮是最终结果
+            break
+
+        # 判断最终结果
         if verified and not second_payload:
             f.poc_result = "confirmed"
             f.poc_output = f"AI: {reasoning}"
-            log.info("verify: %s → CONFIRMED（初始 payload）", f.node_id[:30])
+            log.info("verify: %s → CONFIRMED（第一轮）", f.node_id[:30])
         else:
-            log.info("verify: %s → 初始失败，待 agent 循环", f.node_id[:30])
+            log.info("verify: %s → 第一轮未确认，待 agent 循环", f.node_id[:30])
             need_agent.append(f)
 
     # 6. 第二轮：并发 agent 循环（并发度=3，每个 agent 独立 session）
