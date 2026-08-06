@@ -55,19 +55,49 @@ def trace_route(state: AuditState) -> dict:
     log.info("trace_route: %d 个 finding 待追溯", len(findings))
 
     with CodegraphClient(codegraph_db) as cg:
+        # 预计算 Q6 route 可达集（一次性，后续查每个 finding 都用）
+        from ..codegraph.queries import Q6_ROUTE_REACHABLE_NODES
+        route_rows = cg._conn.execute(Q6_ROUTE_REACHABLE_NODES).fetchall()
+        route_set = {r["id"] for r in route_rows}
+        log.info("trace_route: Q6 route 可达集 %d 个", len(route_set))
+
         for f in findings:
-            # Q5：反向追溯调用链
-            log.info("trace_route: Q5 SQL → WITH RECURSIVE chain AS (...) WHERE id = '%s'", f.node_id[:40])
-            chains = cg.get_call_chain_to_route(f.node_id)
-            if not chains:
-                log.info("trace_route: %s — 无 route 可达链（可能不是路由入口方法）", f.node_id[:30])
+            # 先用 Q6 快速判断是否 route 可达
+            if f.node_id not in route_set:
+                log.info("trace_route: %s — 不在 route 可达集中，跳过", f.node_id[:30])
+                f.confidence = f.confidence * 0.3
+                f.evidence += "\n\n[路由可达性分析] 不可达（不在 route 可达集中）"
                 continue
 
-            # 取最短链（depth 最小 = 最直接路径）
+            # Q5：反向追溯调用链（限制深度 5，加超时）
+            log.info("trace_route: Q5 SQL → WHERE id = '%s' (depth<5)", f.node_id[:40])
+            try:
+                import sqlite3 as _sqlite3
+                # 设置busy timeout + 用短查询
+                cg._conn.execute("PRAGMA query_only = ON")
+                # 临时替换 Q5 深度为 5（不是 18，避免爆炸）
+                from ..codegraph.queries import Q5_REVERSE_CHAIN
+                q5_fast = Q5_REVERSE_CHAIN.replace("c.depth < 18", "c.depth < 5")
+                chains = cg._conn.execute(q5_fast, {"node_id": f.node_id}).fetchall()
+                cg._conn.execute("PRAGMA query_only = OFF")
+            except Exception as e:
+                log.warning("trace_route: Q5 查询失败 → %s，用 Q6 确认可达即可", str(e)[:100])
+                f.evidence += "\n\n[路由可达性分析] 可达（Q5 查询失败，Q6 确认可达）"
+                f.confidence = max(f.confidence, 0.7)
+                continue
+
+            if not chains:
+                # Q5 没找到 route，但 Q6 确认可达 → 标记为可达但链太深
+                log.info("trace_route: %s — Q5 未找到 route（链可能超过 5 层），Q6 确认可达", f.node_id[:30])
+                f.evidence += "\n\n[路由可达性分析] 可达（调用链超过 5 层，无法提取 route 路径）"
+                f.confidence = max(f.confidence, 0.6)
+                continue
+
+            # 取最短链
             chain = chains[0]
             chain_path = chain["chain_path"]
             chain_ids = chain["chain_ids"]
-            log.info("trace_route: %s — 找到路由链 (depth=%d): %s", f.node_id[:30], chain["depth"], chain_path)
+            log.info("trace_route: %s — 找到路由链 (depth=%d): %s", f.node_id[:30], chain["depth"], chain_path[:100])
 
             # 拉取链上每个方法的方法体
             chain_bodies = cg.get_chain_bodies(sources_root, chain_ids)
@@ -75,7 +105,6 @@ def trace_route(state: AuditState) -> dict:
             # 渲染 prompt 并调 AI
             prompt = _render_prompt(f, chain_path, chain_bodies)
             log.info("trace_route: 发送 AI 可达性分析（链 %d 层）", len(chain_bodies))
-            log.info("trace_route: Q5 SQL → node_id=%s, chain_path=%s", f.node_id[:30], chain_path[:100])
             print(f"\n===== 可达性分析 prompt =====\n{prompt[:1500]}\n===== 结束 =====\n")
 
             result = call_reachability_llm(prompt)
@@ -89,10 +118,8 @@ def trace_route(state: AuditState) -> dict:
 
             # 更新 finding
             if result.reachable:
-                # 通用 payload 格式校验：如果 AI 没生成完整 HTTP 请求，用 route 路径包裹
                 payload = result.updated_payload.strip()
                 if payload and not payload.startswith(("POST ", "GET ", "PUT ", "DELETE ", "curl", "http")):
-                    # 从 chain_path 提取 route 路径（格式: route:/path → ...）
                     import re as _re
                     route_match = _re.search(r"route:(/[^\s]+)", chain_path)
                     route_path = route_match.group(1) if route_match else "/"
