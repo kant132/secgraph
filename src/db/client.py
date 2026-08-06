@@ -63,6 +63,23 @@ class VerifiedVulnORM(Base):
     verified_at = Column(Text, default=lambda: datetime.now().isoformat())
 
 
+class AuditMemoryORM(Base):
+    """审计记忆 — 按 nodeid 存审计结果，后续先查再审。"""
+    __tablename__ = "audit_memory"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    node_id = Column(Text, nullable=False)
+    signature = Column(Text, nullable=False)           # qualified_name + signature 拼接
+    input_validation = Column(Text, default="")         # 输入校验
+    output_limitation = Column(Text, default="")        # 输出限制
+    called_methods = Column(Text, default="")           # 调用的方法
+    security_risk = Column(Text, nullable=False)        # 安全风险
+    vuln_type = Column(Text, nullable=False)
+    confidence = Column(REAL, nullable=False)
+    status = Column(Text, default="pending")
+    created_at = Column(Text, default=lambda: datetime.now().isoformat())
+    updated_at = Column(Text, default=lambda: datetime.now().isoformat())
+
+
 class FindingsDB:
     """Open (or create) the findings DB via SQLAlchemy ORM. Same interface
     as the old sqlite3 version — record.py needs no changes."""
@@ -135,6 +152,59 @@ class FindingsDB:
                 FindingORM.run_id == run_id,
                 FindingORM.status == "pending",
             ).all()
+
+    # ---- 审计记忆 --------------------------------------------------------
+
+    def save_memory(self, node_id: str, signature: str, vuln_type: str,
+                    security_risk: str, confidence: float, status: str = "pending",
+                    input_validation: str = "", output_limitation: str = "",
+                    called_methods: str = "") -> None:
+        """保存/更新审计记忆。按 node_id upsert。"""
+        with self._Session() as session:
+            existing = session.query(AuditMemoryORM).filter(
+                AuditMemoryORM.node_id == node_id
+            ).first()
+            if existing:
+                existing.signature = signature
+                existing.input_validation = input_validation
+                existing.output_limitation = output_limitation
+                existing.called_methods = called_methods
+                existing.security_risk = security_risk
+                existing.vuln_type = vuln_type
+                existing.confidence = confidence
+                existing.status = status
+                existing.updated_at = datetime.now().isoformat()
+            else:
+                session.add(AuditMemoryORM(
+                    node_id=node_id, signature=signature,
+                    input_validation=input_validation,
+                    output_limitation=output_limitation,
+                    called_methods=called_methods,
+                    security_risk=security_risk, vuln_type=vuln_type,
+                    confidence=confidence, status=status,
+                ))
+            session.commit()
+
+    def lookup_memory(self, node_id: str, min_confidence: float = 0.9) -> dict | None:
+        """查审计记忆。置信度 >= min_confidence 才返回（直接复用，不再审）。"""
+        with self._Session() as session:
+            row = session.query(AuditMemoryORM).filter(
+                AuditMemoryORM.node_id == node_id,
+                AuditMemoryORM.confidence >= min_confidence,
+            ).first()
+            if row:
+                return {
+                    "node_id": row.node_id,
+                    "signature": row.signature,
+                    "input_validation": row.input_validation,
+                    "output_limitation": row.output_limitation,
+                    "called_methods": row.called_methods,
+                    "security_risk": row.security_risk,
+                    "vuln_type": row.vuln_type,
+                    "confidence": row.confidence,
+                    "status": row.status,
+                }
+            return None
 
     # ---- lifecycle -------------------------------------------------------
 

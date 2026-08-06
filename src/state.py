@@ -92,6 +92,10 @@ class VulnDetail(BaseModel):
     evidence: str = Field(description="行号 + 漏洞根因（污点或逻辑哪里有问题）+ 有没有消毒 + 构造漏洞参数或逻辑需要满足的可达条件")
     payload: str = Field(default="", description="攻击载荷，没有为空")
     confidence: float = Field(description="置信度 0.1-1")
+    input_validation: str = Field(default="", description="输入校验：参数注解/类型/约束")
+    output_limitation: str = Field(default="", description="输出限制：返回值约束/编码/过滤")
+    called_methods: str = Field(default="", description="调用的方法，逗号分隔")
+    security_risk: str = Field(default="", description="安全风险摘要")
 
 
 class AuditResult(RootModel[Dict[str, VulnDetail]]):
@@ -143,6 +147,14 @@ class SupervisorDecision(BaseModel):
     """Supervisor 路由决策 — 根据当前 state 决定下一步派给哪个子agent。"""
     next_agent: str = Field(description="下一步派给哪个子agent: discovery | trace | verify | FINISH")
     reasoning: str = Field(description="为什么派给这个 agent（当前状态分析）")
+
+
+class AuditMemoryResult(BaseModel):
+    """审计记忆结构 — AI 审计输出中提取的记忆字段。"""
+    input_validation: str = Field(default="", description="输入校验：参数注解(@NotNull/@Pattern/@Size)、类型约束、手动校验逻辑")
+    output_limitation: str = Field(default="", description="输出限制：返回值编码/过滤/转义/长度限制")
+    called_methods: str = Field(description="调用的方法（callee qualified_names 逗号分隔）")
+    security_risk: str = Field(description="存在的安全风险（vuln_type + evidence 摘要）")
 
 
 # ---------------------------------------------------------------------------
