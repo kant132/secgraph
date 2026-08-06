@@ -92,7 +92,7 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
     # 尝试 1: with_structured_output
     try:
         result = structured_llm.invoke(prompt)
-        log.debug("llm: 结构化输出成功 → %s", type(result).__name__)
+        log.info("llm: 结构化输出成功 → %s", type(result).__name__)
         return result
     except Exception as e:
         log.warning("llm: 结构化输出失败 → %s，回退到 raw + 手动解析", str(e)[:200])
@@ -104,17 +104,11 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
         raw_resp = _get_raw_llm().invoke(prompt)
         raw_text = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
 
-        # 调试输出：打印 raw LLM 返回的前 500 字（方便排查模型兼容性）
-        print(f"\n{'='*60}")
-        print(f"[LLM 调试] raw 返回（前 500 字）:")
-        try:
-            print(f"  {raw_text[:500]}")
-        except UnicodeEncodeError:
-            print(f"  {raw_text[:500].encode('utf-8', errors='replace').decode('utf-8')}")
-        print(f"{'='*60}")
+        # 完整打印 raw LLM 返回（log，不截断）
+        log.info("llm: raw LLM 返回（完整 %d 字）:\n%s", len(raw_text), raw_text)
 
         clean_json = _strip_markdown_json(raw_text)
-        log.info("llm: 剥 markdown 后 JSON（前 200 字）: %s", clean_json[:200])
+        log.info("llm: 剥 markdown 后 JSON（完整 %d 字）:\n%s", len(clean_json), clean_json)
 
         data = json.loads(clean_json)
         result = model_cls.model_validate(data)
@@ -122,16 +116,12 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
         return result
     except json.JSONDecodeError as e2:
         log.error("llm: JSON 解析失败 → %s", str(e2)[:200])
-        print(f"\n[LLM 调试] JSON 解析失败!")
-        print(f"  raw 返回前 500 字: {raw_text[:500]}")
-        print(f"  剥 markdown 后: {clean_json[:500]}")
-        print(f"  错误: {e2}")
+        log.error("llm: raw 返回完整内容:\n%s", raw_text)
+        log.error("llm: 剥 markdown 后:\n%s", clean_json)
         raise
     except Exception as e2:
         log.error("llm: raw fallback 也失败 → %s", str(e2)[:200])
-        print(f"\n[LLM 调试] raw fallback 失败!")
-        print(f"  raw 返回前 500 字: {raw_text[:500]}")
-        print(f"  错误: {e2}")
+        log.error("llm: raw 返回完整内容:\n%s", raw_text)
         raise
 
 
