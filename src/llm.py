@@ -31,6 +31,17 @@ from .state import (
 
 log = logging.getLogger("secgraph.llm")
 
+# 不用 markdown 代码块的强约束（加到每个 prompt 前面）
+_NO_MARKDOWN_PREFIX = (
+    "重要：你的输出必须是纯 JSON，不要用 ```json 或任何 markdown 代码块包裹，不要有任何多余文本。\n\n"
+)
+
+
+def _add_no_markdown_prefix(prompt: str) -> str:
+    """在 prompt 前面加强约束：不要用 markdown 代码块。"""
+    return _NO_MARKDOWN_PREFIX + prompt
+
+
 _raw_llm = None
 _audit_llm = None
 _reach_llm = None
@@ -75,7 +86,7 @@ def _strip_markdown_json(text: str) -> str:
 def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
     """通用结构化输出调用 — 带 fallback + 调试输出。
 
-    1. 先试 with_structured_output（LangChain 标准方式）
+    1. 先试 with_structured_output(method="json_mode")（比默认 function_calling 更兼容）
     2. 失败 → 回退到 raw LLM + 剥 markdown + 手动 json 解析
     3. 都失败 → 打印 raw 返回内容方便调试 → raise
     """
@@ -86,12 +97,13 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
 
     structured_llm = cached.get(cached_llm_attr)
     if structured_llm is None:
-        structured_llm = _get_raw_llm().with_structured_output(model_cls)
+        # 用 json_mode 而非默认 function_calling — 更广泛兼容（minimax/GLM 等）
+        structured_llm = _get_raw_llm().with_structured_output(model_cls, method="json_mode")
         globals()[cached_llm_attr] = structured_llm
 
-    # 尝试 1: with_structured_output
+    # 尝试 1: with_structured_output (json_mode)
     try:
-        result = structured_llm.invoke(prompt)
+        result = structured_llm.invoke(_add_no_markdown_prefix(prompt))
         log.info("llm: 结构化输出成功 → %s", type(result).__name__)
         return result
     except Exception as e:
@@ -101,7 +113,7 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
     raw_text = ""
     clean_json = ""
     try:
-        raw_resp = _get_raw_llm().invoke(prompt)
+        raw_resp = _get_raw_llm().invoke(_add_no_markdown_prefix(prompt))
         raw_text = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
 
         # 完整打印 raw LLM 返回（log，不截断）
