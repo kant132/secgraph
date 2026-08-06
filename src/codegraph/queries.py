@@ -29,6 +29,7 @@ WHERE n.kind = 'method'
   AND n.file_path NOT LIKE '%/it/%'
   AND n.file_path NOT LIKE '%/opengaussdb/%'
   AND n.file_path NOT LIKE '%/huawei/his/%'
+  AND n.file_path NOT LIKE '%/test/%'
 ORDER BY n.file_path, n.start_line
 """
 

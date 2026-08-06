@@ -28,67 +28,70 @@ from src.state import AuditState, Finding, FileAuditTask, FieldNode, MethodNode
 # ---------------------------------------------------------------------------
 
 MOCK_METHOD_SQLI = MethodNode(
-    id="method:sqli1",
-    qualified_name="org.test::SqlController::query",
-    name="query",
-    signature="Result(String userid)",
-    file_path="sources/org/test/SqlController.java",
-    start_line=10, end_line=20,
+    id="method:997b7879a35fb0d978b1dec266c18e63",
+    qualified_name="org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery",
+    name="injectableQuery",
+    signature="AttackResult (String accountName)",
+    file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    start_line=36, end_line=53,
 )
 
 MOCK_METHOD_XSS = MethodNode(
-    id="method:xss1",
-    qualified_name="org.test::XssController::render",
-    name="render",
-    signature="String(String userInput)",
-    file_path="sources/org/test/XssController.java",
-    start_line=5, end_line=10,
+    id="method:7ee6991165334a5b9998084beba380b5",
+    qualified_name="org.owasp.webgoat.lessons.xss::CrossSiteScriptingLesson1::completed",
+    name="completed",
+    signature="AttackResult (@RequestParam String userid_6a)",
+    file_path="sources/org/owasp/webgoat/lessons/xss/CrossSiteScriptingLesson1.java",
+    start_line=1, end_line=20,
 )
 
 MOCK_METHOD_RCE_UNREACHABLE = MethodNode(
-    id="method:rce1",
-    qualified_name="org.test::InternalUtil::runCmd",
-    name="runCmd",
-    signature="void(String cmd)",
-    file_path="sources/org/test/InternalUtil.java",
-    start_line=1, end_line=5,
+    id="method:1a6f33df415e87274a6d8b8b3c777423",
+    qualified_name="org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::SqlInjectionLesson6a",
+    name="SqlInjectionLesson6a",
+    signature="SqlInjectionLesson6a (LessonDataSource dataSource)",
+    file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    start_line=22, end_line=25,
 )
 
 MOCK_TASK_SQLI = FileAuditTask(
-    file_path="sources/org/test/SqlController.java",
-    node_id="method:sqli1",
+    file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    node_id="method:997b7879a35fb0d978b1dec266c18e63",
     fields=[],
-    method_bodies={"method:sqli1": (
-        "// org.test::SqlController::query\n"
-        "public Result query(String userid) {\n"
-        "    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n"
-        "    return dao.execute(sql);\n"
+    method_bodies={"method:997b7879a35fb0d978b1dec266c18e63": (
+        "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery\n"
+        "public AttackResult injectableQuery(String accountName) {\n"
+        "    query = \"SELECT * FROM user_data WHERE last_name = '\" + accountName + \"'\";\n"
+        "    return executeSqlInjection(connection, query, usedUnion);\n"
         "}\n"
     )},
-    calls={"method:dao1": "// org.test::Dao::execute\npublic Result execute(String sql) {\n    return jdbcTemplate.queryForList(sql);\n}\n"},
+    calls={"method:20df665d446bd71e644585b43acf7832": "// org.owasp.webgoat...::executeSqlInjection\npublic AttackResult executeSqlInjection(...) {\n    return statement.executeQuery(query);\n}\n"},
 )
 
 MOCK_TASK_XSS = FileAuditTask(
-    file_path="sources/org/test/XssController.java",
-    node_id="method:xss1",
+    file_path="sources/org/owasp/webgoat/lessons/xss/CrossSiteScriptingLesson1.java",
+    node_id="method:7ee6991165334a5b9998084beba380b5",
     fields=[],
-    method_bodies={"method:xss1": (
-        "// org.test::XssController::render\n"
-        "public String render(String userInput) {\n"
-        "    return \"<div>\" + userInput + \"</div>\";\n"
+    method_bodies={"method:7ee6991165334a5b9998084beba380b5": (
+        "// org.owasp.webgoat.lessons.xss::CrossSiteScriptingLesson1::completed\n"
+        "public AttackResult completed(@RequestParam String userid_6a) {\n"
+        "    return AttackResultBuilder.success(this)\n"
+        "        .feedback(\"xss.lesson1.success\")\n"
+        "        .output(userid_6a)\n"
+        "        .build();\n"
         "}\n"
     )},
     calls={},
 )
 
 MOCK_TASK_RCE_UNREACHABLE = FileAuditTask(
-    file_path="sources/org/test/InternalUtil.java",
-    node_id="method:rce1",
+    file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    node_id="method:1a6f33df415e87274a6d8b8b3c777423",
     fields=[],
-    method_bodies={"method:rce1": (
-        "// org.test::InternalUtil::runCmd\n"
-        "public void runCmd(String cmd) {\n"
-        "    Runtime.getRuntime().exec(cmd);\n"
+    method_bodies={"method:1a6f33df415e87274a6d8b8b3c777423": (
+        "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::SqlInjectionLesson6a\n"
+        "public SqlInjectionLesson6a(LessonDataSource dataSource) {\n"
+        "    this.dataSource = dataSource;\n"
         "}\n"
     )},
     calls={},
@@ -100,7 +103,7 @@ def create_mock_codegraph_client_multi():
     mock_cg = MagicMock()
     mock_cg.db_path = "mock"
 
-    # Q1: 返回 3 个方法
+    # Q1: 返回 3 个真实方法
     mock_cg.list_entry_methods.return_value = [MOCK_METHOD_SQLI, MOCK_METHOD_XSS, MOCK_METHOD_RCE_UNREACHABLE]
 
     # Q3: 无字段
@@ -115,26 +118,28 @@ def create_mock_codegraph_client_multi():
 
     # Q4: SQLi 有 callees，其他无
     def get_callee_bodies(sources_root, node_id):
-        if node_id == "method:sqli1":
+        if node_id == "method:997b7879a35fb0d978b1dec266c18e63":
             return MOCK_TASK_SQLI.calls
         return {}
     mock_cg.get_callee_bodies.side_effect = get_callee_bodies
 
-    # is_route_reachable: SQLi 和 XSS 可达，RCE 不可达
+    # is_route_reachable: SQLi 和 XSS 可达，构造函数不可达
     def is_route_reachable(node_id):
-        return node_id in ("method:sqli1", "method:xss1")
+        return node_id in ("method:997b7879a35fb0d978b1dec266c18e63", "method:7ee6991165334a5b9998084beba380b5")
     mock_cg.is_route_reachable.side_effect = is_route_reachable
 
-    # Q5: SQLi 和 XSS 有调用链，RCE 没有
+    # Q5: SQLi 和 XSS 有调用链，构造函数没有
     mock_cg.get_call_chain_to_route.side_effect = lambda node_id: [
-        {"id": "route:/api/query", "qualified_name": "route:/api/query", "kind": "route",
-         "file_path": "sources/org/test/SqlController.java", "start_line": 1, "end_line": 1,
-         "depth": 1, "chain_path": f"route:/api/query -> {node_id}",
-         "chain_ids": f"route:/api/query,{node_id}"}
-    ] if node_id in ("method:sqli1", "method:xss1") else []
+        {"id": "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a",
+         "qualified_name": "route:/SqlInjectionAdvanced/attack6a", "kind": "route",
+         "file_path": "sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+         "start_line": 30, "end_line": 34, "depth": 1,
+         "chain_path": f"route:/SqlInjectionAdvanced/attack6a -> {node_id}",
+         "chain_ids": f"route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a,{node_id}"}
+    ] if node_id in ("method:997b7879a35fb0d978b1dec266c18e63", "method:7ee6991165334a5b9998084beba380b5") else []
 
     mock_cg.get_chain_bodies.return_value = {
-        "route:/api/query": "// route:/api/query\n@PostMapping(\"/api/query\")\npublic Result query(@RequestParam String userid) {\n    return handle(userid);\n}\n",
+        "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a": "// route:/SqlInjectionAdvanced/attack6a\n@PostMapping(\"/SqlInjectionAdvanced/attack6a\")\npublic AttackResult completed(@RequestParam String userid_6a) {\n    return injectableQuery(userid_6a);\n}\n",
     }
 
     mock_cg.init_memory_table.return_value = None
@@ -161,7 +166,7 @@ def base_state_multi():
         "mode": "dev",
         "codegraph_db": "mock",
         "sources_root": str(Path(tmpdir) / "sources"),
-        "pkg_prefix": "org/test",
+            "pkg_prefix": "org/owasp/webgoat/lessons",
         "findings_db": str(Path(tmpdir) / "test.db"),
         "findings_dir": str(Path(tmpdir) / "findings"),
         "logs_dir": str(Path(tmpdir) / "logs"),
@@ -283,7 +288,7 @@ class TestMultiVulnPipeline:
              patch("src.nodes.verify.node.HttpClient", return_value=mock_http), \
              patch("src.nodes.verify.node.run_agent") as mock_run_agent:
 
-            mock_run_agent.return_value = (True, "PoC 验证成功", "POST /api/query HTTP/1.1\n\nuserid=' OR '1'='1", [])
+            mock_run_agent.return_value = (True, "PoC 验证成功", "POST /SqlInjectionAdvanced/attack6a HTTP/1.1\n\nuserid_6a=' OR '1'='1", [])
 
             from src.nodes.verify.node import verify_finding
             state.update(verify_finding(state))

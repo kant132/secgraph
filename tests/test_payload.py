@@ -85,7 +85,7 @@ class TestFinding:
     def test_create(self):
         f = Finding(
             file_path="sources/Test.java",
-            node_id="method:abc123",
+            node_id="method:997b7879a35fb0d978b1dec266c18e63",
             vuln_type="SQLi",
             severity="high",
             evidence="line 42: executeQuery",

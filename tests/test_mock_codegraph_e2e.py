@@ -23,74 +23,100 @@ from src.state import AuditState, Finding, FileAuditTask, FieldNode, MethodNode
 # ---------------------------------------------------------------------------
 
 def create_mock_codegraph_client():
-    """创建 mock CodegraphClient，返回构造的 SQL 注入漏洞数据。"""
+    """创建 mock CodegraphClient，返回真实 webgoat 漏洞数据。"""
 
     mock_cg = MagicMock()
     mock_cg.db_path = "mock"
 
-    # Q1: 返回 1 个有漏洞的入口方法
+    # Q1: 返回 1 个有漏洞的入口方法（真实 webgoat nodeid）
     mock_method = MethodNode(
-        id="method:abc123",
-        qualified_name="org.test::SqlController::query",
-        name="query",
-        signature="Result(String userid)",
-        file_path="sources/org/test/SqlController.java",
-        start_line=10,
-        end_line=20,
+        id="method:997b7879a35fb0d978b1dec266c18e63",
+        qualified_name="org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery",
+        name="injectableQuery",
+        signature="AttackResult (String accountName)",
+        file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+        start_line=36,
+        end_line=53,
     )
     mock_cg.list_entry_methods.return_value = [mock_method]
 
-    # Q3: 返回 1 个字段
+    # Q3: 返回字段
     mock_cg.list_fields_by_nodeid.return_value = [
-        FieldNode(id="field:1", qualified_name="org.test::SqlController::dao", name="dao", start_line=5, end_line=5),
+        FieldNode(id="field:1", qualified_name="org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::dataSource", name="dataSource", start_line=23, end_line=23),
     ]
 
-    # get_method_body: 返回有漏洞的方法体
+    # get_method_body: 返回真实方法体
     mock_cg.get_method_body.return_value = (
-        "// org.test::SqlController::query\n"
-        "public Result query(String userid) {\n"
-        "    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n"
-        "    return dao.execute(sql);\n"
+        "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery\n"
+        "public AttackResult injectableQuery(String accountName) {\n"
+        "    String query = \"\";\n"
+        "    try {\n"
+        "        Connection connection = this.dataSource.getConnection();\n"
+        "        boolean usedUnion = unionQueryChecker(accountName);\n"
+        "        query = \"SELECT * FROM user_data WHERE last_name = '\" + accountName + \"'\";\n"
+        "        return executeSqlInjection(connection, query, usedUnion);\n"
+        "    } catch (Exception e) {\n"
+        "        return AttackResultBuilder.failed(this).output(...).build();\n"
+        "    }\n"
         "}\n"
     )
 
-    # Q4: 返回被调方法体
+    # Q4: 返回真实被调方法体
     mock_cg.get_callee_bodies.return_value = {
-        "method:dao1": "// org.test::Dao::execute\n"
-        "public Result execute(String sql) {\n"
-        "    return jdbcTemplate.queryForList(sql);\n"
-        "}\n",
+        "method:20df665d446bd71e644585b43acf7832": (
+            "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::executeSqlInjection\n"
+            "private AttackResult executeSqlInjection(Connection connection, String query, boolean usedUnion) {\n"
+            "    Statement statement = connection.createStatement(1004, 1007);\n"
+            "    ResultSet results = statement.executeQuery(query);\n"
+            "    ...\n"
+            "}\n"
+        ),
+        "method:6132b9dafbe4e0a343bbcf84c0e33021": (
+            "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::unionQueryChecker\n"
+            "private boolean unionQueryChecker(String accountName) {\n"
+            "    return accountName.matches(\"(?i)(^[^-/*;)]*)(\\\\s*)UNION(.*$)\");\n"
+            "}\n"
+        ),
     }
 
     # is_route_reachable: 返回 True
     mock_cg.is_route_reachable.return_value = True
 
-    # Q5: 返回调用链
+    # Q5: 返回调用链（真实 route）
     mock_cg.get_call_chain_to_route.return_value = [{
-        "id": "route:/api/query",
-        "qualified_name": "route:/api/query",
+        "id": "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a",
+        "qualified_name": "route:/SqlInjectionAdvanced/attack6a",
         "kind": "route",
-        "file_path": "sources/org/test/SqlController.java",
-        "start_line": 1,
-        "end_line": 1,
+        "file_path": "sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+        "start_line": 30,
+        "end_line": 34,
         "depth": 1,
-        "chain_path": "route:/api/query -> org.test::SqlController::query",
-        "chain_ids": "route:/api/query,method:abc123",
+        "chain_path": "route:/SqlInjectionAdvanced/attack6a -> org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::completed -> org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery",
+        "chain_ids": "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a,method:0d187d9ac1aa8a2efc9d66e1b0077f5d,method:997b7879a35fb0d978b1dec266c18e63",
     }]
 
     # get_chain_bodies: 返回调用链方法体
     mock_cg.get_chain_bodies.return_value = {
-        "route:/api/query": "// route:/api/query\n"
-        "@PostMapping(\"/api/query\")\n"
-        "public Result query(@RequestParam String userid) {\n"
-        "    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n"
-        "    return dao.execute(sql);\n"
-        "}\n",
-        "method:abc123": "// org.test::SqlController::query\n"
-        "public Result query(String userid) {\n"
-        "    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n"
-        "    return dao.execute(sql);\n"
-        "}\n",
+        "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a": (
+            "// route:/SqlInjectionAdvanced/attack6a\n"
+            "@PostMapping({\"/SqlInjectionAdvanced/attack6a\"})\n"
+            "public AttackResult completed(@RequestParam(\"userid_6a\") String userId) {\n"
+            "    return injectableQuery(userId);\n"
+            "}\n"
+        ),
+        "method:0d187d9ac1aa8a2efc9d66e1b0077f5d": (
+            "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::completed\n"
+            "public AttackResult completed(@RequestParam(\"userid_6a\") String userId) {\n"
+            "    return injectableQuery(userId);\n"
+            "}\n"
+        ),
+        "method:997b7879a35fb0d978b1dec266c18e63": (
+            "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery\n"
+            "public AttackResult injectableQuery(String accountName) {\n"
+            "    query = \"SELECT * FROM user_data WHERE last_name = '\" + accountName + \"'\";\n"
+            "    return executeSqlInjection(connection, query, usedUnion);\n"
+            "}\n"
+        ),
     }
 
     # init_memory_table / save_memory / lookup_memory
@@ -118,7 +144,7 @@ def base_state():
             "mode": "dev",
             "codegraph_db": "mock",
             "sources_root": str(Path(tmpdir) / "sources"),
-            "pkg_prefix": "org/test",
+            "pkg_prefix": "org/owasp/webgoat/lessons",
             "findings_db": str(Path(tmpdir) / "test.db"),
             "findings_dir": str(Path(tmpdir) / "findings"),
             "logs_dir": str(Path(tmpdir) / "logs"),
@@ -157,8 +183,8 @@ class TestDiscoverWithMockCodegraph:
             # 验证 work_list 有 1 个 task
             assert len(result["work_list"]) == 1
             task = result["work_list"][0]
-            assert task.node_id == "method:abc123"
-            assert task.file_path == "sources/org/test/SqlController.java"
+            assert task.node_id == "method:997b7879a35fb0d978b1dec266c18e63"
+            assert task.file_path == "sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java"
 
             # 验证 method_bodies 有方法体
             assert len(task.method_bodies) == 1
@@ -184,20 +210,29 @@ class TestDiscoverWithMockCodegraph:
             pytest.skip("LLM_API_KEY 未配置，跳过 LLM 测试")
 
         task = FileAuditTask(
-            file_path="sources/org/test/SqlController.java",
-            node_id="method:abc123",
-            fields=[FieldNode(id="field:1", qualified_name="org.test::SqlController::dao", name="dao", start_line=5, end_line=5)],
-            method_bodies={"method:abc123": (
-                "// org.test::SqlController::query\n"
-                "public Result query(String userid) {\n"
-                "    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n"
-                "    return dao.execute(sql);\n"
+            file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+            node_id="method:997b7879a35fb0d978b1dec266c18e63",
+            fields=[FieldNode(id="field:1", qualified_name="org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::dataSource", name="dataSource", start_line=23, end_line=23)],
+            method_bodies={"method:997b7879a35fb0d978b1dec266c18e63": (
+                "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery\n"
+                "public AttackResult injectableQuery(String accountName) {\n"
+                "    String query = \"\";\n"
+                "    try {\n"
+                "        Connection connection = this.dataSource.getConnection();\n"
+                "        boolean usedUnion = unionQueryChecker(accountName);\n"
+                "        query = \"SELECT * FROM user_data WHERE last_name = '\" + accountName + \"'\";\n"
+                "        return executeSqlInjection(connection, query, usedUnion);\n"
+                "    } catch (Exception e) {\n"
+                "        return AttackResultBuilder.failed(this).output(...).build();\n"
+                "    }\n"
                 "}\n"
             )},
-            calls={"method:dao1": (
-                "// org.test::Dao::execute\n"
-                "public Result execute(String sql) {\n"
-                "    return jdbcTemplate.queryForList(sql);\n"
+            calls={"method:20df665d446bd71e644585b43acf7832": (
+                "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::executeSqlInjection\n"
+                "private AttackResult executeSqlInjection(Connection connection, String query, boolean usedUnion) {\n"
+                "    Statement statement = connection.createStatement(1004, 1007);\n"
+                "    ResultSet results = statement.executeQuery(query);\n"
+                "    ...\n"
                 "}\n"
             )},
         )
@@ -292,7 +327,7 @@ class TestDiscoverWithMockCodegraph:
              patch("src.nodes.verify.node.HttpClient", return_value=mock_http), \
              patch("src.nodes.verify.node.run_agent") as mock_run_agent:
 
-            mock_run_agent.return_value = (True, "PoC 验证成功，响应包含数据库数据", "POST /api/query HTTP/1.1\n\nuserid=' OR '1'='1", [{"iter": 1, "tool": "send_http", "result": "200 OK"}])
+            mock_run_agent.return_value = (True, "PoC 验证成功", "POST /SqlInjectionAdvanced/attack6a HTTP/1.1\n\nuserid_6a=' OR '1'='1", [])
 
             from src.nodes.verify.node import verify_finding
             verify_result = verify_finding(base_state)
