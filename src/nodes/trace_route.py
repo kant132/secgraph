@@ -118,6 +118,9 @@ def trace_route(state: AuditState) -> dict:
                              result.reachable, result.confidence)
                     _apply(f, result, chain_path)
                 except Exception as e:
+                    # LLM 失败：写 fallback tag，避免后续 _after_discovery 反复 re-trace 这个 finding
                     log.warning("trace_route: %s LLM 失败 → %s", f.node_id[:30], e)
+                    f.evidence += f"\n\n{EVIDENCE_TRACE_TAG} 不可达（LLM 分析失败: {str(e)[:80]}）"
+                    f.confidence *= 0.3
 
     return {"findings": findings}

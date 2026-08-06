@@ -56,7 +56,9 @@ def discovery_agent(state: AuditState) -> dict:
                     file_path=task.file_path,
                     node_id=node_id,
                     vuln_type=memory["vuln_type"],
-                    severity=memory.get("status", "pending"),
+                    # audit_memory 表没有 severity 列（只有 status 生命周期），
+                    # 用 "unknown" 占位 — 用户/后续 LLM 可补
+                    severity="unknown",
                     evidence=memory["security_risk"],
                     payload="",
                     confidence=memory["confidence"],

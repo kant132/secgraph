@@ -37,8 +37,10 @@ _NO_MARKDOWN_PREFIX = (
     "重要：你的输出必须是纯 JSON，不要用 ```json 或任何 markdown 代码块包裹，不要有任何多余文本。\n\n"
 )
 
-# role → (raw LLM 实例, 结构化 LLM 实例) 缓存
-_LLM_CACHE: dict[str, tuple[ChatOpenAI, object]] = {}
+# 角色 → raw LLM 实例（按 role 共享，因为 raw 不绑 model class）
+_RAW_CACHE: dict[str, ChatOpenAI] = {}
+# (role, model_cls) → 结构化 LLM 实例（按 model class 区分，避免同 role 不同 schema 串号）
+_STRUCTURED_CACHE: dict[tuple[str, type], object] = {}
 
 
 def _create_llm(role: str) -> ChatOpenAI:
@@ -55,24 +57,28 @@ def _create_llm(role: str) -> ChatOpenAI:
     return llm
 
 
-def _get_structured(role: str, model_cls):
-    """取 role 对应的结构化输出 LLM（首次创建并缓存）。"""
-    cached = _LLM_CACHE.get(role)
-    if cached is None:
-        raw = _create_llm(role)
-        structured = raw.with_structured_output(model_cls, method="json_mode")
-        _LLM_CACHE[role] = (raw, structured)
-        return structured
-    return cached[1]
-
-
 def _get_raw(role: str) -> ChatOpenAI:
     """取 role 对应的 raw ChatOpenAI（首次创建并缓存）。"""
-    cached = _LLM_CACHE.get(role)
-    if cached is None:
-        _LLM_CACHE[role] = (_create_llm(role), None)
-        return _LLM_CACHE[role][0]
-    return cached[0]
+    raw = _RAW_CACHE.get(role)
+    if raw is None:
+        raw = _create_llm(role)
+        _RAW_CACHE[role] = raw
+    return raw
+
+
+def _get_structured(role: str, model_cls):
+    """取 (role, model_cls) 对应的结构化输出 LLM（首次创建并缓存）。
+
+    必须按 (role, model_cls) 二元组 key — 同 role 不同 model class（探索 vs 验证）
+    各自独立的 schema，不能共享。
+    """
+    key = (role, model_cls)
+    structured = _STRUCTURED_CACHE.get(key)
+    if structured is None:
+        raw = _get_raw(role)
+        structured = raw.with_structured_output(model_cls, method="json_mode")
+        _STRUCTURED_CACHE[key] = structured
+    return structured
 
 
 def _strip_markdown_json(text: str) -> str:
