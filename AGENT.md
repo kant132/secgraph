@@ -8,6 +8,8 @@
    - Q5 反向追溯 route 入口时必须跟 IN ('calls', 'references')
    - Q6 正向从 route 遍历时必须跟 IN ('calls', 'references')
    - 只跟 calls 会导致 route 可达集只含 route 自身，过滤后返回 0 个方法
+   - Q1 不按 visibility='public' 过滤 — protected/private 方法也可能是漏洞点（Spring AOP/反射/内部调用）
+   - 过滤策略：Q1 全量方法 → Q6 route 可达集取交集 → 只审 route 能到达的方法
 6、LangGraph 节点返回值必须包含所有下游需要读的 state 字段（如 work_list）
    - state.update() 只更新局部副本，LangGraph 只合并 return 的 dict
    - return 缺字段 → 全局 state 读不到 → 路由函数判断错误
