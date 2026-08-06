@@ -32,17 +32,6 @@
       "output_limitation": "<输出限制：返回值编码/过滤/转义/长度限制，无则为空>",
       "called_methods": "<调用的方法，逗号分隔>",
       "security_risk": "<安全风险摘要：vuln_type + evidence 摘要>"
-    },
-    "target_id1": {
-      "vuln_type": "SQLi|SSRF|deser|path-traversal|XXE|expression-injection|RCE|XSS|JNDI|LDAP-injection|XPath-injection",
-      "severity": "critical|high|medium|low|unknown",
-      "evidence": "<行号 + 漏洞根因（污点或逻辑哪里有问题）+ 构造漏洞参数或逻辑需要满足的可达条件（污点或逻辑分析）,如果unknown无法确定，说明可能还需要什么信息>",
-      "payload": "有漏洞给出payload（真实满足业务要求），没有为空",
-      "confidence": "0.1-1",
-      "input_validation": "<输入校验：参数注解、类型约束、手动校验，无则为空>",
-      "output_limitation": "<输出限制：返回值约束，无则为空>",
-      "called_methods": "<调用的方法，逗号分隔>",
-      "security_risk": "<安全风险摘要>"
     }
   }
 ```

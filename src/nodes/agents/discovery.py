@@ -83,6 +83,7 @@ def discovery_agent(state: AuditState) -> dict:
     return {
         "findings": all_findings,
         "audit_index": audit_index,
+        "work_list": work_list,  # 必须返回，否则 _after_discovery 读不到
         "agent_history": state.get("agent_history", []) + [{
             "agent": "discovery",
             "result": f"审计到 {audit_index}/{len(work_list)}, {len(all_findings)} findings, 剩余 {remaining}",
