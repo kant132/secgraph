@@ -111,7 +111,7 @@ def explore_login(target_url: str, username: str, password: str) -> dict | None:
         log.warning("verify: playwright 未安装")
         return None
 
-    from ..llm import call_exploration_llm
+    from ...llm import call_exploration_llm
 
     all_post_requests: list[dict] = []
 
