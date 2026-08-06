@@ -105,13 +105,13 @@ def verify_finding(state: AuditState) -> dict:
                 continue
             break
 
-        if verified and not second_payload:
-            f.poc_result = "confirmed"
-            f.poc_output = f"AI: {reasoning}"
-            log.info("verify: %s → CONFIRMED（第一轮）", f.node_id[:30])
+        # 所有 finding 都进 agent 循环（不只是失败的）
+        # confirmed 的也进 agent 做深度验证（CIA 证明 + PoC 确认）
+        if verified:
+            log.info("verify: %s → 第一轮 confirmed，进入 agent 深度验证", f.node_id[:30])
         else:
-            log.info("verify: %s → 第一轮未确认，待 agent 循环", f.node_id[:30])
-            need_agent.append(f)
+            log.info("verify: %s → 第一轮未确认，进入 agent 深度验证", f.node_id[:30])
+        need_agent.append(f)
 
     # 5. 第二轮：并发 agent 循环
     if need_agent:
