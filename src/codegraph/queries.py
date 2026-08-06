@@ -17,17 +17,16 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Q1 — 入口方法发现（直接返回 nodeid 列表，不再先查 file_path）
 # 业务包前缀过滤，返回 public 带参方法的完整元数据。
+#   -- and  qualified_name like '%injectableQuery%'
 # ---------------------------------------------------------------------------
 
 Q1_ENTRY_METHODS = """
 SELECT id, qualified_name, name, signature, file_path, start_line, end_line
 FROM nodes
 WHERE kind = 'method'
-  AND visibility = 'public'
   AND language = 'java'
   AND signature NOT GLOB '*()'
   AND file_path LIKE :pkg_pattern
-  and  qualified_name like '%injectableQuery%'
 ORDER BY file_path, start_line
 """
 
