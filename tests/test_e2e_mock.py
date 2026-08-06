@@ -24,75 +24,125 @@ from src.state import (
 # ---------------------------------------------------------------------------
 
 MOCK_METHOD = MethodNode(
-    id="method:abc123",
-    qualified_name="org.test::SqlController::query",
-    name="query",
-    signature="Result(String userid)",
-    file_path="sources/org/test/SqlController.java",
-    start_line=10,
-    end_line=20,
+    id="method:997b7879a35fb0d978b1dec266c18e63",
+    qualified_name="org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery",
+    name="injectableQuery",
+    signature="AttackResult (String accountName)",
+    file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    start_line=36,
+    end_line=53,
 )
 
 MOCK_TASK = FileAuditTask(
-    file_path="sources/org/test/SqlController.java",
-    node_id="method:abc123",
-    fields=[FieldNode(id="field:1", qualified_name="org.test::SqlController::dao", name="dao", start_line=5, end_line=5)],
-    method_bodies={"method:abc123": "// org.test::SqlController::query\npublic Result query(String userid) {\n    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n    return dao.execute(sql);\n}"},
-    calls={"method:dao1": "// org.test::Dao::execute\npublic Result execute(String sql) {\n    return jdbcTemplate.queryForList(sql);\n}"},
+    file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    node_id="method:997b7879a35fb0d978b1dec266c18e63",
+    fields=[FieldNode(id="field:1", qualified_name="org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::dataSource", name="dataSource", start_line=23, end_line=23)],
+    method_bodies={"method:997b7879a35fb0d978b1dec266c18e63": (
+        "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery\n"
+        "public AttackResult injectableQuery(String accountName) {\n"
+        "    String query = \"\";\n"
+        "    try {\n"
+        "        Connection connection = this.dataSource.getConnection();\n"
+        "        try {\n"
+        "            boolean usedUnion = unionQueryChecker(accountName);\n"
+        "            query = \"SELECT * FROM user_data WHERE last_name = '\" + accountName + \"'\";\n"
+        "            AttackResult attackResultExecuteSqlInjection = executeSqlInjection(connection, query, usedUnion);\n"
+        "            if (connection != null) { connection.close(); }\n"
+        "            return attackResultExecuteSqlInjection;\n"
+        "        } finally {}\n"
+        "    } catch (Exception e) {\n"
+        "        return AttackResultBuilder.failed(this).output(...).build();\n"
+        "    }\n"
+        "}\n"
+    )},
+    calls={
+        "method:6132b9dafbe4e0a343bbcf84c0e33021": (
+            "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::unionQueryChecker\n"
+            "private boolean unionQueryChecker(String accountName) {\n"
+            "    return accountName.matches(\"(?i)(^[^-/*;)]*)(\\\\s*)UNION(.*$)\");\n"
+            "}\n"
+        ),
+        "method:20df665d446bd71e644585b43acf7832": (
+            "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::executeSqlInjection\n"
+            "private AttackResult executeSqlInjection(Connection connection, String query, boolean usedUnion) {\n"
+            "    Statement statement = connection.createStatement(1004, 1007);\n"
+            "    ResultSet results = statement.executeQuery(query);\n"
+            "    ...\n"
+            "}\n"
+        ),
+    },
 )
 
 MOCK_FINDING = Finding(
-    file_path="sources/org/test/SqlController.java",
-    node_id="method:abc123",
+    file_path="sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    node_id="method:997b7879a35fb0d978b1dec266c18e63",
     vuln_type="SQLi",
-    severity="high",
-    evidence="line 12: userid 拼接到 SQL，无消毒",
-    payload="POST /api/query HTTP/1.1\n\nuserid=' OR '1'='1",
-    confidence=0.8,
+    severity="critical",
+    evidence="accountName 直接拼接到 SQL 语句 query = \"SELECT * FROM user_data WHERE last_name = '\" + accountName + \"'\"，无参数化查询，无消毒",
+    payload="POST /SqlInjectionAdvanced/attack6a HTTP/1.1\n\nuserid_6a=' OR '1'='1",
+    confidence=0.9,
 )
 
 MOCK_CHAIN = [{
-    "id": "route:/api/query",
-    "qualified_name": "route:/api/query",
+    "id": "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a",
+    "qualified_name": "route:/SqlInjectionAdvanced/attack6a",
     "kind": "route",
-    "file_path": "sources/org/test/SqlController.java",
-    "start_line": 1,
-    "end_line": 1,
+    "file_path": "sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java",
+    "start_line": 30,
+    "end_line": 34,
     "depth": 1,
-    "chain_path": "route:/api/query -> org.test::SqlController::query",
-    "chain_ids": "route:/api/query,method:abc123",
+    "chain_path": "route:/SqlInjectionAdvanced/attack6a -> org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::completed -> org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery",
+    "chain_ids": "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a,method:0d187d9ac1aa8a2efc9d66e1b0077f5d,method:997b7879a35fb0d978b1dec266c18e63",
 }]
 
 MOCK_CHAIN_BODIES = {
-    "route:/api/query": "// route:/api/query\n@PostMapping(\"/api/query\")\npublic Result query(@RequestParam String userid) {\n    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n    return dao.execute(sql);\n}",
-    "method:abc123": "// org.test::SqlController::query\npublic Result query(String userid) {\n    String sql = \"SELECT * FROM users WHERE id='\" + userid + \"'\";\n    return dao.execute(sql);\n}",
+    "route:sources/org/owasp/webgoat/lessons/sqlinjection/advanced/SqlInjectionLesson6a.java::route:/SqlInjectionAdvanced/attack6a": (
+        "// route:/SqlInjectionAdvanced/attack6a\n"
+        "@PostMapping({\"/SqlInjectionAdvanced/attack6a\"})\n"
+        "public AttackResult completed(@RequestParam(\"userid_6a\") String userId) {\n"
+        "    return injectableQuery(userId);\n"
+        "}\n"
+    ),
+    "method:0d187d9ac1aa8a2efc9d66e1b0077f5d": (
+        "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::completed\n"
+        "public AttackResult completed(@RequestParam(\"userid_6a\") String userId) {\n"
+        "    return injectableQuery(userId);\n"
+        "}\n"
+    ),
+    "method:997b7879a35fb0d978b1dec266c18e63": (
+        "// org.owasp.webgoat.lessons.sqlinjection.advanced::SqlInjectionLesson6a::injectableQuery\n"
+        "public AttackResult injectableQuery(String accountName) {\n"
+        "    query = \"SELECT * FROM user_data WHERE last_name = '\" + accountName + \"'\";\n"
+        "    return executeSqlInjection(connection, query, usedUnion);\n"
+        "}\n"
+    ),
 }
 
 MOCK_AUDIT_RESULT = AuditResult.model_validate({
-    "method:abc123": {
+    "method:997b7879a35fb0d978b1dec266c18e63": {
         "vuln_type": "SQLi",
-        "severity": "high",
-        "evidence": "line 12: userid 拼接到 SQL，无消毒",
-        "payload": "userid=' OR '1'='1",
-        "confidence": 0.8,
-        "input_validation": "无",
+        "severity": "critical",
+        "evidence": "accountName 直接拼接到 SQL 语句，无参数化查询，无消毒",
+        "payload": "' OR '1'='1",
+        "confidence": 0.9,
+        "input_validation": "unionQueryChecker 仅检查 UNION 关键字，不做输入过滤",
         "output_limitation": "无",
-        "called_methods": "dao.execute",
-        "security_risk": "SQL注入：userid 直接拼接 SQL 无消毒",
+        "called_methods": "executeSqlInjection, unionQueryChecker",
+        "security_risk": "SQL注入：accountName 未消毒直接拼接 SQL",
     }
 })
 
 MOCK_REACHABILITY_RESULT = ReachabilityResult(
     reachable=True,
-    updated_payload="POST /api/query HTTP/1.1\n\nuserid=' OR '1'='1",
-    conditions="需要 POST 到 /api/query，提供 userid 参数",
+    updated_payload="POST /SqlInjectionAdvanced/attack6a HTTP/1.1\n\nuserid_6a=' OR '1'='1",
+    conditions="需要 POST 到 /SqlInjectionAdvanced/attack6a，提供 userid_6a 参数",
     confidence=0.9,
 )
 
 MOCK_POC_RESULT = PoCVerificationResult(
     verified=True,
     cvss_score="9.8 Critical",
-    cia_proof="C: PoC 返回了 users 表数据（id, name, password）",
+    cia_proof="C: PoC 返回了 user_data 表数据（id, name, password）",
     reasoning="响应 body 包含数据库数据，SQL注入成功",
     second_payload="",
 )
@@ -191,7 +241,7 @@ class TestEndToEnd:
 
             findings = result["findings"]
             assert len(findings) == 1
-            assert "POST /api/query" in findings[0].payload
+            assert "POST /SqlInjectionAdvanced/attack6a" in findings[0].payload
             assert "[路由可达性分析] 可达" in findings[0].evidence
             mock_llm.assert_called_once()
 
