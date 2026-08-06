@@ -152,28 +152,32 @@ def mock_cg_multi():
 
 @pytest.fixture
 def base_state_multi():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield {
-            "mode": "dev",
-            "codegraph_db": "mock",
-            "sources_root": str(Path(tmpdir) / "sources"),
-            "pkg_prefix": "org/test",
-            "findings_db": str(Path(tmpdir) / "test.db"),
-            "findings_dir": str(Path(tmpdir) / "findings"),
-            "logs_dir": str(Path(tmpdir) / "logs"),
-            "file_limit": 10,
-            "run_id": "test_multi",
-            "max_iterations": 3,
-            "llm_model": "test",
-            "work_list": [],
-            "audit_index": 0,
-            "findings": [],
-            "verified": [],
-            "reflection_notes": [],
-            "iteration": 0,
-            "agent_history": [],
-            "next_agent": "",
-        }
+    """用固定的 test 目录（不自动删除，方便检查 .md 和 DB）"""
+    tmpdir = str(Path(__file__).parent / "test_output")
+    Path(tmpdir, "sources").mkdir(parents=True, exist_ok=True)
+    Path(tmpdir, "findings").mkdir(parents=True, exist_ok=True)
+    Path(tmpdir, "logs").mkdir(parents=True, exist_ok=True)
+    yield {
+        "mode": "dev",
+        "codegraph_db": "mock",
+        "sources_root": str(Path(tmpdir) / "sources"),
+        "pkg_prefix": "org/test",
+        "findings_db": str(Path(tmpdir) / "test.db"),
+        "findings_dir": str(Path(tmpdir) / "findings"),
+        "logs_dir": str(Path(tmpdir) / "logs"),
+        "file_limit": 10,
+        "run_id": "test_multi",
+        "max_iterations": 3,
+        "llm_model": "test",
+        "work_list": [],
+        "audit_index": 0,
+        "findings": [],
+        "verified": [],
+        "reflection_notes": [],
+        "iteration": 0,
+        "agent_history": [],
+        "next_agent": "",
+    }
 
 
 class TestMultiVulnPipeline:
@@ -288,10 +292,21 @@ class TestMultiVulnPipeline:
         for f in state["findings"]:
             print(f"  {f.vuln_type} node={f.node_id[:20]} → poc_result={f.poc_result}")
 
-        # 5. record (真实 DB + .md)
-        from src.nodes.record import record
-        state["findings"] = state.get("findings", [])
-        record_result = record(state)
+        # 5. record (mock CodegraphClient + .md)
+        mock_conn_rec = MagicMock()
+        mock_cursor_rec = MagicMock()
+        mock_cursor_rec.lastrowid = 1
+        mock_conn_rec.execute.return_value = mock_cursor_rec
+
+        with patch("src.nodes.record.CodegraphClient") as mock_cg_class_rec:
+            mock_cg_rec = MagicMock()
+            mock_cg_rec._conn = mock_conn_rec
+            mock_cg_class_rec.return_value.__enter__ = MagicMock(return_value=mock_cg_rec)
+            mock_cg_class_rec.return_value.__exit__ = MagicMock(return_value=None)
+
+            from src.nodes.record import record
+            state["findings"] = state.get("findings", [])
+            record_result = record(state)
 
         # 验证 .md 文件
         findings_dir = Path(state["findings_dir"])
@@ -307,28 +322,5 @@ class TestMultiVulnPipeline:
             content = md.read_text(encoding="utf-8")
             assert "PoC Result" in content, f"{md.name} 应包含 PoC Result"
 
-        # 验证 DB 记录
-        db_path = state["findings_db"]
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        db_findings = conn.execute("SELECT * FROM findings").fetchall()
-        print(f"\n=== DB findings 表: {len(db_findings)} 行 ===")
-        for r in db_findings:
-            print(f"  {r['vuln_type']:10s} {r['status']:15s} node={r['node_id'][:20]}")
-
-        assert len(db_findings) >= 1, "DB 应至少有 1 条 finding"
-
-        verified = conn.execute("SELECT * FROM verified_vulns").fetchall()
-        print(f"\n=== DB verified_vulns 表: {len(verified)} 行 ===")
-
-        runs = conn.execute("SELECT * FROM runs").fetchall()
-        print(f"\n=== DB runs 表: {len(runs)} 行 ===")
-        for r in runs:
-            print(f"  run_id={r['id']} findings={r['total_findings']} verified={r['total_verified']}")
-
-        conn.close()
-
-        print(f"\n=== 验证完毕 ===")
-        print(f"  findings 总数: {len(state['findings'])}")
-        print(f"  .md 文件数: {len(md_files)}")
-        print(f"  DB findings 行数: {len(db_findings)}")
+        # 验证 mock conn 被调用了 insert
+        assert mock_conn_rec.execute.call_count >= len(state["findings"])

@@ -304,9 +304,20 @@ class TestDiscoverWithMockCodegraph:
             assert f.poc_result in ("confirmed", "denied", "inconclusive"), \
                 f"poc_result 应是 confirmed/denied/inconclusive，实际: {f.poc_result}"
 
-        # 5. record (真实 DB + .md)
-        from src.nodes.record import record
-        record_result = record(base_state)
+        # 5. record (mock CodegraphClient + .md)
+        mock_conn_rec = MagicMock()
+        mock_cursor_rec = MagicMock()
+        mock_cursor_rec.lastrowid = 1
+        mock_conn_rec.execute.return_value = mock_cursor_rec
+
+        with patch("src.nodes.record.CodegraphClient") as mock_cg_class_rec:
+            mock_cg_rec = MagicMock()
+            mock_cg_rec._conn = mock_conn_rec
+            mock_cg_class_rec.return_value.__enter__ = MagicMock(return_value=mock_cg_rec)
+            mock_cg_class_rec.return_value.__exit__ = MagicMock(return_value=None)
+
+            from src.nodes.record import record
+            record_result = record(base_state)
 
         # 验证写了 .md 文件
         findings_dir = Path(base_state["findings_dir"])

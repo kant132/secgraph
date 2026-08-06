@@ -43,3 +43,4 @@ class TestConfig:
         assert state["codegraph_db"] == cfg.codegraph_db
         assert state["pkg_prefix"] == cfg.pkg_prefix
         assert state["llm_model"] == cfg.llm_model
+        assert "findings_db" not in state  # 已删

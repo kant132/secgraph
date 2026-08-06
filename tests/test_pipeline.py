@@ -46,6 +46,7 @@ class TestStateSchema:
         assert "audit_index" in annotations
         assert "next_agent" in annotations
         assert "agent_history" in annotations
+        assert "findings_db" not in annotations  # 已删 — 用 codegraph_db
 
     def test_no_reflect_fields(self):
         from src.state import AuditState

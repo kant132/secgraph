@@ -27,8 +27,7 @@ class Config:
     # options
     mode: str = "dev"          # dev | runtime
 
-    # secgraph's own paths (not the target project's)
-    findings_db: str = ""
+    # secgraph's own paths（输出报告在输入项目下，不在 secgraph 下）
     findings_dir: str = ""
     logs_dir: str = ""
 
@@ -41,12 +40,11 @@ class Config:
 
     def __post_init__(self) -> None:
         base = Path(__file__).parent.parent  # D:\secgraph
-        if not self.findings_db:
-            self.findings_db = str(base / "secgraph.db")
+        # 输出报告/日志在输入项目下（不在 secgraph 下）
         if not self.findings_dir:
-            self.findings_dir = str(base / "findings")
+            self.findings_dir = str(Path(self.project_path) / "secgraph_findings")
         if not self.logs_dir:
-            self.logs_dir = str(base / "logs")
+            self.logs_dir = str(Path(self.project_path) / "secgraph_logs")
         # LLM config from .env (only if not explicitly passed)
         if not self.llm_api_key:
             self.llm_api_key = os.getenv("LLM_API_KEY", "")
@@ -89,7 +87,6 @@ class Config:
             "codegraph_db": self.codegraph_db,
             "sources_root": self.sources_root,
             "pkg_prefix": self.pkg_prefix,
-            "findings_db": self.findings_db,
             "findings_dir": self.findings_dir,
             "logs_dir": self.logs_dir,
             "file_limit": self.file_limit,

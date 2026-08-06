@@ -110,7 +110,6 @@ class TestEndToEnd:
             "codegraph_db": "mock",
             "sources_root": "mock",
             "pkg_prefix": "org/test",
-            "findings_db": "mock",
             "findings_dir": "/tmp/test_findings",
             "logs_dir": "/tmp/test_logs",
             "file_limit": 10,
@@ -160,7 +159,6 @@ class TestEndToEnd:
             "codegraph_db": "mock",
             "sources_root": "mock",
             "pkg_prefix": "org/test",
-            "findings_db": "mock",
             "findings_dir": "/tmp/test",
             "logs_dir": "/tmp/test",
             "file_limit": 10,
@@ -203,61 +201,73 @@ class TestEndToEnd:
         from src.nodes.record import record
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            state: AuditState = {
-                "mode": "dev",
-                "codegraph_db": "mock",
-                "sources_root": "mock",
-                "pkg_prefix": "org/test",
-                "findings_db": str(Path(tmpdir) / "test.db"),
-                "findings_dir": str(Path(tmpdir) / "findings"),
-                "logs_dir": str(Path(tmpdir) / "logs"),
-                "file_limit": 10,
-                "run_id": "test3",
-                "max_iterations": 3,
-                "llm_model": "test",
-                "findings": [
-                    Finding(
-                        file_path="Test.java", node_id="method:1", vuln_type="SQLi",
-                        severity="high", evidence="test", payload="POST /x HTTP/1.1\n\na=1",
-                        confidence=0.9, poc_result="confirmed", poc="curl test",
-                        poc_output="200 OK",
-                    ),
-                    Finding(
-                        file_path="Test.java", node_id="method:2", vuln_type="XSS",
-                        severity="medium", evidence="test2", payload="",
-                        confidence=0.5, poc_result="denied",
-                    ),
-                    Finding(
-                        file_path="Test.java", node_id="method:3", vuln_type="SSRF",
-                        severity="low", evidence="test3", payload="",
-                        confidence=0.3, poc_result="inconclusive",
-                    ),
-                ],
-                "verified": [],
-                "work_list": [],
-                "audit_index": 3,
-                "reflection_notes": [],
-                "iteration": 0,
-                "agent_history": [],
-                "next_agent": "",
-            }
+            # mock CodegraphClient + _conn
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.lastrowid = 1
+            mock_conn.execute.return_value = mock_cursor
 
-            result = record(state)
+            mock_cg = MagicMock()
+            mock_cg._conn = mock_conn
 
-            # 验证 3 个 finding 都写了 .md
-            findings_dir = Path(tmpdir) / "findings"
-            md_files = list(findings_dir.glob("*.md"))
-            assert len(md_files) == 3
+            with patch("src.nodes.record.CodegraphClient") as mock_cg_class:
+                mock_cg_class.return_value.__enter__ = MagicMock(return_value=mock_cg)
+                mock_cg_class.return_value.__exit__ = MagicMock(return_value=None)
 
-            # 验证文件名包含验证结果
-            filenames = [f.name for f in md_files]
-            assert any("confirmed" in name for name in filenames)
-            assert any("denied" in name for name in filenames)
-            assert any("inconclusive" in name for name in filenames)
+                state = {
+                    "mode": "dev",
+                    "codegraph_db": "mock",
+                    "sources_root": "mock",
+                    "pkg_prefix": "org/test",
+                    "findings_dir": str(Path(tmpdir) / "findings"),
+                    "logs_dir": str(Path(tmpdir) / "logs"),
+                    "file_limit": 10,
+                    "run_id": "test3",
+                    "max_iterations": 3,
+                    "llm_model": "test",
+                    "findings": [
+                        Finding(
+                            file_path="Test.java", node_id="method:1", vuln_type="SQLi",
+                            severity="high", evidence="test", payload="POST /x HTTP/1.1\n\na=1",
+                            confidence=0.9, poc_result="confirmed", poc="curl test",
+                            poc_output="200 OK",
+                        ),
+                        Finding(
+                            file_path="Test.java", node_id="method:2", vuln_type="XSS",
+                            severity="medium", evidence="test2", payload="",
+                            confidence=0.5, poc_result="denied",
+                        ),
+                        Finding(
+                            file_path="Test.java", node_id="method:3", vuln_type="SSRF",
+                            severity="low", evidence="test3", payload="",
+                            confidence=0.3, poc_result="inconclusive",
+                        ),
+                    ],
+                    "verified": [],
+                    "work_list": [],
+                    "audit_index": 3,
+                    "reflection_notes": [],
+                    "iteration": 0,
+                    "agent_history": [],
+                    "next_agent": "",
+                }
 
-            # 验证 verified 列表
-            assert len(result["verified"]) == 1
-            assert result["verified"][0].poc_result == "confirmed"
+                result = record(state)
+
+                # 验证 3 个 finding 都写了 .md
+                findings_dir = Path(tmpdir) / "findings"
+                md_files = list(findings_dir.glob("*.md"))
+                assert len(md_files) == 3
+
+                # 验证文件名包含验证结果
+                filenames = [f.name for f in md_files]
+                assert any("confirmed" in name for name in filenames)
+                assert any("denied" in name for name in filenames)
+                assert any("inconclusive" in name for name in filenames)
+
+                # 验证 verified 列表
+                assert len(result["verified"]) == 1
+                assert result["verified"][0].poc_result == "confirmed"
 
     def test_graph_compiles(self):
         """测试 graph 编译。"""

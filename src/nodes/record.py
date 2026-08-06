@@ -1,16 +1,14 @@
-"""record node — 持久化所有 findings 到 DB + 为每个 finding 写 .md（不论验证结果）。
+"""record node — 持久化所有 findings 到 codegraph.db + 为每个 finding 写 .md。
 
-verify 完成后记录验证过程和结果，包括：
-- confirmed: 漏洞已验证 → verified_vulns 表 + .md
-- denied: 漏洞被否认 → findings 表 + .md（记录为什么否认）
-- inconclusive: 无法确定 → findings 表 + .md（记录缺少什么信息）
+findings/verified_vulns/runs 表直接在 codegraph.db 里建（和代码索引同库）。
+.md 报告写到输入项目的 secgraph_findings/ 目录下。
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from ..db import FindingsDB
+from ..codegraph import CodegraphClient
 from ..state import AuditState, Finding
 
 log = logging.getLogger("secgraph.record")
@@ -20,7 +18,6 @@ def _write_finding_md(findings_dir: str, run_id: str, f: Finding) -> str:
     """为每个 finding 写 .md（不论验证结果），记录完整验证过程。"""
     stem = Path(f.file_path).stem
     safe_node = f.node_id.replace(":", "_").replace("/", "_")[:40]
-    # 文件名标记验证结果
     result_tag = f.poc_result or "pending"
     name = f"{stem}_{safe_node}_{f.vuln_type}_{result_tag}.md"
     out = Path(findings_dir) / name
@@ -60,36 +57,65 @@ def _write_finding_md(findings_dir: str, run_id: str, f: Finding) -> str:
 
 
 def record(state: AuditState) -> dict:
-    """持久化所有 findings 到 DB + 为每个 finding 写 .md（不论验证结果）。"""
-    db_path = state["findings_db"]
+    """持久化所有 findings 到 codegraph.db + 为每个 finding 写 .md。"""
+    codegraph_db = state["codegraph_db"]
     run_id = state["run_id"]
     findings_dir = state["findings_dir"]
     findings: list[Finding] = list(state.get("findings", []))
 
     verified_count = 0
-    with FindingsDB(db_path) as db:
-        for f in findings:
-            fid = db.insert_finding(run_id, f)
+    with CodegraphClient(codegraph_db) as cg:
+        # 建 runs/findings/verified_vulns 表（如果不存在）— 直接在 codegraph.db 里
+        from pathlib import Path as _Path
+        schema_path = _Path(__file__).parent.parent / "db" / "schema.sql"
+        cg._conn.executescript(schema_path.read_text(encoding="utf-8"))
+        cg._conn.commit()
 
-            # 每个 finding 都写 .md（记录完整验证过程和结果）
+        # 记录 run
+        cg._conn.execute(
+            "INSERT OR REPLACE INTO runs(id, mode, pkg_prefix, file_limit, iteration) VALUES (?, ?, ?, ?, ?)",
+            (run_id, state.get("mode", "dev"), state.get("pkg_prefix", ""),
+             state.get("file_limit"), state.get("iteration", 0)),
+        )
+        cg._conn.commit()
+
+        for f in findings:
+            # 插入 finding
+            cur = cg._conn.execute(
+                "INSERT INTO findings(run_id, file_path, node_id, vuln_type, severity, evidence, payload, confidence, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (run_id, f.file_path, f.node_id, f.vuln_type, f.severity,
+                 f.evidence, f.payload, f.confidence, f.status),
+            )
+            fid = cur.lastrowid if cur.lastrowid else 0
+
+            # 每个 finding 都写 .md
             md_path = _write_finding_md(findings_dir, run_id, f)
 
             if f.poc_result == "confirmed":
-                db.mark_verified(fid, run_id, f, md_path)
+                cg._conn.execute(
+                    "INSERT INTO verified_vulns(finding_id, run_id, file_path, node_id, vuln_type, severity, evidence, payload, poc, poc_result, poc_output, md_path) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (fid, run_id, f.file_path, f.node_id, f.vuln_type, f.severity,
+                     f.evidence, f.payload, f.poc or "", f.poc_result or "inconclusive",
+                     f.poc_output or "", md_path),
+                )
+                cg._conn.execute("UPDATE findings SET status='verified' WHERE id=?", (fid,))
                 verified_count += 1
                 log.info("record: CONFIRMED → %s", md_path)
             elif f.poc_result == "denied":
-                db.mark_false_positive(fid)
+                cg._conn.execute("UPDATE findings SET status='false_positive' WHERE id=?", (fid,))
                 log.info("record: DENIED → %s", md_path)
-            elif f.poc_result == "inconclusive":
-                log.info("record: INCONCLUSIVE → %s", md_path)
             else:
-                log.info("record: PENDING（未验证）→ %s", md_path)
+                log.info("record: INCONCLUSIVE → %s", md_path)
 
-        db.finish_run(run_id, files_audited=state.get("audit_index", 0),
-                      total_findings=len(findings), total_verified=verified_count)
+        # 更新 run 统计
+        cg._conn.execute(
+            "UPDATE runs SET finished_at=datetime('now'), files_audited=?, total_findings=?, total_verified=? WHERE id=?",
+            (state.get("audit_index", 0), len(findings), verified_count, run_id),
+        )
+        cg._conn.commit()
 
-    log.info("record: %d findings (%d confirmed, %d denied, rest inconclusive/pending) → %s",
-             len(findings), verified_count,
-             sum(1 for f in findings if f.poc_result == "denied"), db_path)
+    log.info("record: %d findings (%d confirmed) → codegraph.db + %s",
+             len(findings), verified_count, findings_dir)
     return {"verified": [f for f in findings if f.poc_result == "confirmed"]}

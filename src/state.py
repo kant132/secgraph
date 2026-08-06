@@ -164,11 +164,10 @@ class AuditMemoryResult(BaseModel):
 class AuditState(TypedDict, total=False):
     # required config slice — set at START before any node runs
     mode: Required[Literal["dev", "runtime"]]
-    codegraph_db: Required[str]
+    codegraph_db: Required[str]          # codegraph.db（代码索引 + findings 表 + audit_memory 表，同库）
     sources_root: Required[str]
     pkg_prefix: Required[str]
-    findings_db: Required[str]
-    findings_dir: Required[str]
+    findings_dir: Required[str]          # .md 报告目录（在输入项目下）
     logs_dir: Required[str]
     file_limit: Required[int | None]   # dev=10, runtime=None
     run_id: Required[str]

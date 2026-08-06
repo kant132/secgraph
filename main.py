@@ -59,11 +59,6 @@ def main() -> None:
              run_id, cfg.mode, cfg.project_path, cfg.group_id, cfg.pkg_prefix, cfg.file_limit)
     log.info("       codegraph_db=%s  llm_model=%s", cfg.codegraph_db, cfg.llm_model)
 
-    # seed the FindingsDB run row
-    from src.db import FindingsDB
-    with FindingsDB(cfg.findings_db) as db:
-        db.start_run(run_id, cfg.mode, cfg.pkg_prefix, cfg.file_limit, iteration=0)
-
     initial_state = {
         **cfg.to_state(),
         "run_id": run_id,
@@ -72,6 +67,8 @@ def main() -> None:
         "findings": [],
         "verified": [],
         "reflection_notes": [],
+        "agent_history": [],
+        "next_agent": "",
     }
 
     app = build_graph()
