@@ -99,6 +99,7 @@ WITH RECURSIVE chain AS (
   FROM chain c
   INNER JOIN edges e ON e.target = c.id AND e.kind IN ('calls', 'references')
   INNER JOIN nodes n1 ON e.source = n1.id
+  INNER JOIN route_reachable rr ON n1.id = rr.id
   WHERE c.depth < 18
 )
 SELECT id, qualified_name, kind, file_path, start_line, end_line, depth, chain_path, chain_ids

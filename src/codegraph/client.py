@@ -27,17 +27,60 @@ class CodegraphClient:
         # 可写连接：必须才能读 WAL（只读会跳过 WAL 返回 0 行）
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
+        # 预计算 route 可达集，写入临时表，后续所有查询直接 JOIN
+        self._init_route_reachable_table()
+
+    def _init_route_reachable_table(self) -> None:
+        """将 Q6 route 可达集写入 route_reachable 临时表，后续查询直接 JOIN。"""
+        self._conn.executescript("""
+        DROP TABLE IF EXISTS route_reachable;
+        CREATE TEMP TABLE route_reachable AS
+        WITH RECURSIVE reachable AS (
+          SELECT id, 0 AS depth
+          FROM nodes WHERE kind = 'route'
+          UNION
+          SELECT n2.id, r.depth + 1
+          FROM reachable r
+          INNER JOIN edges e ON e.source = r.id AND e.kind IN ('calls', 'references')
+          INNER JOIN nodes n2 ON e.target = n2.id
+          WHERE r.depth < 18
+        )
+        SELECT DISTINCT id FROM reachable;
+        CREATE INDEX IF NOT EXISTS idx_route_reachable ON route_reachable(id);
+        """)
+        self._conn.commit()
+        count = self._conn.execute("SELECT COUNT(*) FROM route_reachable").fetchone()[0]
+        log.info("codegraph: route_reachable 临时表已建，%d 个可达 node", count)
+
+    def is_route_reachable(self, node_id: str) -> bool:
+        """快速判断 node_id 是否在 route 可达集中。"""
+        row = self._conn.execute(
+            "SELECT 1 FROM route_reachable WHERE id = ? LIMIT 1", (node_id,)
+        ).fetchone()
+        return row is not None
 
     # ---- Q1: 入口方法发现 -----------------------------------------------
 
     def list_entry_methods(self, pkg_prefix: str, limit: int | None = None) -> list[MethodNode]:
-        """Q1 + Q6 过滤 — 先查所有入口方法，再用 Q6 route 可达集过滤。
-        route 可达集为空（无 route 节点）时返回全量。"""
+        """Q1 + route_reachable JOIN — 只返回 route 可达的入口方法。"""
         pattern = f"%{pkg_prefix}%"
-
-        # Q1: 全量入口方法
-        rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
-        all_methods = [
+        rows = self._conn.execute("""
+            SELECT n.id, n.qualified_name, n.name, n.signature, n.file_path, n.start_line, n.end_line
+            FROM nodes n
+            INNER JOIN route_reachable rr ON n.id = rr.id
+            WHERE n.kind = 'method'
+              AND n.language = 'java'
+              AND n.signature NOT GLOB '*()'
+              AND n.file_path LIKE ?
+              AND n.file_path NOT LIKE '%/bean/%'
+              AND n.file_path NOT LIKE '%/entity/%'
+              AND n.file_path NOT LIKE '%/foundation/%'
+              AND n.file_path NOT LIKE '%/it/%'
+              AND n.file_path NOT LIKE '%/opengaussdb/%'
+              AND n.file_path NOT LIKE '%/huawei/his/%'
+            ORDER BY n.file_path, n.start_line
+        """, (pattern,)).fetchall()
+        methods = [
             MethodNode(
                 id=r["id"],
                 qualified_name=r["qualified_name"],
@@ -49,23 +92,7 @@ class CodegraphClient:
             )
             for r in rows
         ]
-        log.info("codegraph: Q1 全量入口方法 %d 个", len(all_methods))
-
-        # Q6: route 正向 18 层可达 nodeid 集合
-        route_rows = self._conn.execute(Q6_ROUTE_REACHABLE_NODES).fetchall()
-        route_set = {r["id"] for r in route_rows}
-        log.info("codegraph: Q6 route 可达 nodeid 集合 %d 个", len(route_set))
-
-        if route_set:
-            # 过滤：只保留 route 可达的方法
-            filtered = [m for m in all_methods if m.id in route_set]
-            removed = len(all_methods) - len(filtered)
-            log.info("codegraph: route 过滤后 %d 个（过滤掉 %d 个不可达）",
-                     len(filtered), removed)
-            methods = filtered
-        else:
-            log.info("codegraph: 无 route 节点，跳过过滤，使用全量")
-            methods = all_methods
+        log.info("codegraph: route 可达入口方法 %d 个", len(methods))
 
         if limit is not None:
             methods = methods[:limit]

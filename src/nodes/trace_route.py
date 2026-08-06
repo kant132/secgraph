@@ -55,15 +55,9 @@ def trace_route(state: AuditState) -> dict:
     log.info("trace_route: %d 个 finding 待追溯", len(findings))
 
     with CodegraphClient(codegraph_db) as cg:
-        # 预计算 Q6 route 可达集（快速判断是否可达）
-        from ..codegraph.queries import Q6_ROUTE_REACHABLE_NODES
-        route_rows = cg._conn.execute(Q6_ROUTE_REACHABLE_NODES).fetchall()
-        route_set = {r["id"] for r in route_rows}
-        log.info("trace_route: Q6 route 可达集 %d 个", len(route_set))
-
         for f in findings:
-            # 先用 Q6 快速判断是否 route 可达
-            if f.node_id not in route_set:
+            # 快速判断是否 route 可达（查 route_reachable 表，不跑递归 CTE）
+            if not cg.is_route_reachable(f.node_id):
                 log.info("trace_route: %s — 不在 route 可达集中，跳过", f.node_id[:30])
                 f.confidence = f.confidence * 0.3
                 f.evidence += "\n\n[路由可达性分析] 不可达（不在 route 可达集中）"
