@@ -73,12 +73,12 @@ def _strip_markdown_json(text: str) -> str:
 
 
 def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
-    """通用结构化输出调用 — 带 fallback。
+    """通用结构化输出调用 — 带 fallback + 调试输出。
 
     1. 先试 with_structured_output（LangChain 标准方式）
     2. 失败 → 回退到 raw LLM + 剥 markdown + 手动 json 解析
+    3. 都失败 → 打印 raw 返回内容方便调试 → raise
     """
-    # 获取或创建结构化 LLM
     global _audit_llm, _reach_llm, _explore_llm, _verify_llm, _retry_llm, _supervisor_llm
     cached = {"_audit_llm": _audit_llm, "_reach_llm": _reach_llm,
               "_explore_llm": _explore_llm, "_verify_llm": _verify_llm,
@@ -87,24 +87,51 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
     structured_llm = cached.get(cached_llm_attr)
     if structured_llm is None:
         structured_llm = _get_raw_llm().with_structured_output(model_cls)
-        # 缓存
         globals()[cached_llm_attr] = structured_llm
 
     # 尝试 1: with_structured_output
     try:
-        return structured_llm.invoke(prompt)
+        result = structured_llm.invoke(prompt)
+        log.debug("llm: 结构化输出成功 → %s", type(result).__name__)
+        return result
     except Exception as e:
-        log.warning("llm: 结构化输出失败 → %s，回退到 raw + 手动解析", str(e)[:100])
+        log.warning("llm: 结构化输出失败 → %s，回退到 raw + 手动解析", str(e)[:200])
 
     # 尝试 2: raw LLM + 剥 markdown + 手动解析
+    raw_text = ""
+    clean_json = ""
     try:
         raw_resp = _get_raw_llm().invoke(prompt)
         raw_text = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+
+        # 调试输出：打印 raw LLM 返回的前 500 字（方便排查模型兼容性）
+        print(f"\n{'='*60}")
+        print(f"[LLM 调试] raw 返回（前 500 字）:")
+        try:
+            print(f"  {raw_text[:500]}")
+        except UnicodeEncodeError:
+            print(f"  {raw_text[:500].encode('utf-8', errors='replace').decode('utf-8')}")
+        print(f"{'='*60}")
+
         clean_json = _strip_markdown_json(raw_text)
+        log.info("llm: 剥 markdown 后 JSON（前 200 字）: %s", clean_json[:200])
+
         data = json.loads(clean_json)
-        return model_cls.model_validate(data)
+        result = model_cls.model_validate(data)
+        log.info("llm: raw fallback 成功 → %s", type(result).__name__)
+        return result
+    except json.JSONDecodeError as e2:
+        log.error("llm: JSON 解析失败 → %s", str(e2)[:200])
+        print(f"\n[LLM 调试] JSON 解析失败!")
+        print(f"  raw 返回前 500 字: {raw_text[:500]}")
+        print(f"  剥 markdown 后: {clean_json[:500]}")
+        print(f"  错误: {e2}")
+        raise
     except Exception as e2:
         log.error("llm: raw fallback 也失败 → %s", str(e2)[:200])
+        print(f"\n[LLM 调试] raw fallback 失败!")
+        print(f"  raw 返回前 500 字: {raw_text[:500]}")
+        print(f"  错误: {e2}")
         raise
 
 
