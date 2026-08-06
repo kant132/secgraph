@@ -6,16 +6,13 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+from ...prompts import render
 from ...state import Finding
 from ...tools.http_client import SKIP_HEADERS
 
 log = logging.getLogger("secgraph.verify.payload")
-
-_VERIFY_TEMPLATE_PATH = (Path(__file__).parent.parent.parent / "prompts" / "poc_verification_template.md").resolve()
-_VERIFY_TEMPLATE_TEXT = _VERIFY_TEMPLATE_PATH.read_text(encoding="utf-8")
 
 _CURL_URL_RE = re.compile(r"https?://\S+")
 
@@ -183,15 +180,12 @@ def ai_verify(finding: Finding, req_method: str, req_url: str,
     req_detail = format_request_detail(req_method, req_url, req_headers, req_body)
     resp_detail = format_response_detail(status, resp_headers, resp_body)
 
-    tmpl = _VERIFY_TEMPLATE_TEXT
-    prompt = (
-        tmpl
-        .replace("{vuln_type}", finding.vuln_type)
-        .replace("{severity}", finding.severity)
-        .replace("{evidence}", finding.evidence)
-        .replace("{request_detail}", req_detail)
-        .replace("{response_detail}", resp_detail)
-    )
+    prompt = render("poc_verification",
+                    vuln_type=finding.vuln_type,
+                    severity=finding.severity,
+                    evidence=finding.evidence,
+                    request_detail=req_detail,
+                    response_detail=resp_detail)
 
     print(f"\n{'='*60}")
     print(f"发送 AI 验证判断...")

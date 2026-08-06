@@ -21,9 +21,9 @@ from ...tools.http_client import HttpClient
 
 log = logging.getLogger("secgraph.verify.agent")
 
-_AGENT_PROMPT = Path(__file__).parent.parent.parent / "prompts" / "agent_system_prompt.md"
-_AGENT_PROMPT = _AGENT_PROMPT.resolve()
-_AGENT_PROMPT_TEXT = _AGENT_PROMPT.read_text(encoding="utf-8")
+# agent 系统提示（无 {vars} 占位符，直接 load 全文）
+from ...prompts import load as _load_prompt
+_AGENT_PROMPT_TEXT = _load_prompt("agent_system")
 
 AGENT_RECURSION_LIMIT = 50  # LangGraph agent 子图的最大步数（防止无限循环）
 

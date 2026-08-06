@@ -10,21 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from ..llm import call_audit_llm
+from ..prompts import render
 from ..state import AuditState, Finding
 
 log = logging.getLogger("secgraph.audit")
 
-_TEMPLATE_PATH = (Path(__file__).with_name("..") / "prompts" / "audit_template.md").resolve()
-_TEMPLATE_TEXT = _TEMPLATE_PATH.read_text(encoding="utf-8")
-
 
 def _render_template(task) -> str:
-    """Fill the audit prompt template with one FileAuditTask's data.
-    Uses str.replace (not str.format) to avoid collision with literal {} in the
-    JSON output section of the template."""
+    """Fill the audit prompt template with one FileAuditTask's data."""
     fields_text = "\n".join(
         f"  {f.qualified_name}  (line {f.start_line})" for f in task.fields
     ) or "  (none)"
@@ -32,10 +27,10 @@ def _render_template(task) -> str:
     methods_json = json.dumps(task.method_bodies, indent=2, ensure_ascii=False) if task.method_bodies else "{}"
     calls_json = json.dumps(task.calls, indent=2, ensure_ascii=False) if task.calls else "{}"
 
-    return (_TEMPLATE_TEXT
-        .replace("{fields}", fields_text)
-        .replace("{methods}", methods_json)
-        .replace("{calls}", calls_json))
+    return render("audit",
+                  fields=fields_text,
+                  methods=methods_json,
+                  calls=calls_json)
 
 
 def audit_file(state: AuditState) -> dict:

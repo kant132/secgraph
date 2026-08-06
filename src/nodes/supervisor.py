@@ -9,15 +9,12 @@ Supervisor → 子agent → Supervisor → 子agent → ... → FINISH → recor
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from ..llm import call_supervisor_llm
+from ..prompts import render
 from ..state import EVIDENCE_TRACE_TAG, AuditState
 
 log = logging.getLogger("secgraph.supervisor")
-
-_TEMPLATE_PATH = (Path(__file__).parent.parent / "prompts" / "supervisor_prompt.md").resolve()
-_TEMPLATE_TEXT = _TEMPLATE_PATH.read_text(encoding="utf-8")
 
 
 def _build_state_summary(state: AuditState) -> str:
@@ -75,7 +72,7 @@ def supervisor(state: AuditState) -> dict:
     state_summary = _build_state_summary(state)
     log.info("[supervisor] state:\n%s", state_summary)
 
-    prompt = _TEMPLATE_TEXT.replace("{state_summary}", state_summary)
+    prompt = render("supervisor", state_summary=state_summary)
 
     try:
         decision = call_supervisor_llm(prompt)
