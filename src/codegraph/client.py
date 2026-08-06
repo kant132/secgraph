@@ -13,7 +13,7 @@ from pathlib import Path
 from ..state import CallEdge, FieldNode, MethodNode
 from .queries import (
     Q1_ENTRY_METHODS, Q2_CALL_EDGES, Q3_FIELDS_BY_NODE, Q4_CALLEE_META, Q5_REVERSE_CHAIN,
-    Q6_ROUTE_REACHABLE_NODES, Q7_ROUTE_REACHABLE_ENTRY_METHODS,
+    ROUTE_REACHABLE_INIT, IS_ROUTE_REACHABLE,
 )
 
 log = logging.getLogger("secgraph.codegraph")
@@ -24,62 +24,25 @@ class CodegraphClient:
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        # 可写连接：必须才能读 WAL（只读会跳过 WAL 返回 0 行）
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
-        # 预计算 route 可达集，写入临时表，后续所有查询直接 JOIN
-        self._init_route_reachable_table()
-
-    def _init_route_reachable_table(self) -> None:
-        """将 Q6 route 可达集写入 route_reachable 临时表，后续查询直接 JOIN。"""
-        self._conn.executescript("""
-        DROP TABLE IF EXISTS route_reachable;
-        CREATE TEMP TABLE route_reachable AS
-        WITH RECURSIVE reachable AS (
-          SELECT id, 0 AS depth
-          FROM nodes WHERE kind = 'route'
-          UNION
-          SELECT n2.id, r.depth + 1
-          FROM reachable r
-          INNER JOIN edges e ON e.source = r.id AND e.kind IN ('calls', 'references')
-          INNER JOIN nodes n2 ON e.target = n2.id
-          WHERE r.depth < 18
-        )
-        SELECT DISTINCT id FROM reachable;
-        CREATE INDEX IF NOT EXISTS idx_route_reachable ON route_reachable(id);
-        """)
+        # 建临时表（调用一次，后续全部 JOIN）
+        self._conn.executescript(ROUTE_REACHABLE_INIT)
         self._conn.commit()
         count = self._conn.execute("SELECT COUNT(*) FROM route_reachable").fetchone()[0]
-        log.info("codegraph: route_reachable 临时表已建，%d 个可达 node", count)
+        log.info("codegraph: route_reachable 表已建，%d 个可达 node", count)
 
     def is_route_reachable(self, node_id: str) -> bool:
         """快速判断 node_id 是否在 route 可达集中。"""
-        row = self._conn.execute(
-            "SELECT 1 FROM route_reachable WHERE id = ? LIMIT 1", (node_id,)
-        ).fetchone()
+        row = self._conn.execute(IS_ROUTE_REACHABLE, {"node_id": node_id}).fetchone()
         return row is not None
 
     # ---- Q1: 入口方法发现 -----------------------------------------------
 
     def list_entry_methods(self, pkg_prefix: str, limit: int | None = None) -> list[MethodNode]:
-        """Q1 + route_reachable JOIN — 只返回 route 可达的入口方法。"""
+        """Q1 — route 可达的入口方法（JOIN route_reachable 直接过滤）。"""
         pattern = f"%{pkg_prefix}%"
-        rows = self._conn.execute("""
-            SELECT n.id, n.qualified_name, n.name, n.signature, n.file_path, n.start_line, n.end_line
-            FROM nodes n
-            INNER JOIN route_reachable rr ON n.id = rr.id
-            WHERE n.kind = 'method'
-              AND n.language = 'java'
-              AND n.signature NOT GLOB '*()'
-              AND n.file_path LIKE ?
-              AND n.file_path NOT LIKE '%/bean/%'
-              AND n.file_path NOT LIKE '%/entity/%'
-              AND n.file_path NOT LIKE '%/foundation/%'
-              AND n.file_path NOT LIKE '%/it/%'
-              AND n.file_path NOT LIKE '%/opengaussdb/%'
-              AND n.file_path NOT LIKE '%/huawei/his/%'
-            ORDER BY n.file_path, n.start_line
-        """, (pattern,)).fetchall()
+        rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
         methods = [
             MethodNode(
                 id=r["id"],
