@@ -55,7 +55,7 @@ def trace_route(state: AuditState) -> dict:
     log.info("trace_route: %d 个 finding 待追溯", len(findings))
 
     with CodegraphClient(codegraph_db) as cg:
-        # 预计算 Q6 route 可达集（一次性，后续查每个 finding 都用）
+        # 预计算 Q6 route 可达集（快速判断是否可达）
         from ..codegraph.queries import Q6_ROUTE_REACHABLE_NODES
         route_rows = cg._conn.execute(Q6_ROUTE_REACHABLE_NODES).fetchall()
         route_set = {r["id"] for r in route_rows}
@@ -69,27 +69,13 @@ def trace_route(state: AuditState) -> dict:
                 f.evidence += "\n\n[路由可达性分析] 不可达（不在 route 可达集中）"
                 continue
 
-            # Q5：反向追溯调用链（限制深度 5，加超时）
-            log.info("trace_route: Q5 SQL → WHERE id = '%s' (depth<5)", f.node_id[:40])
-            try:
-                import sqlite3 as _sqlite3
-                # 设置busy timeout + 用短查询
-                cg._conn.execute("PRAGMA query_only = ON")
-                # 临时替换 Q5 深度为 5（不是 18，避免爆炸）
-                from ..codegraph.queries import Q5_REVERSE_CHAIN
-                q5_fast = Q5_REVERSE_CHAIN.replace("c.depth < 18", "c.depth < 5")
-                chains = cg._conn.execute(q5_fast, {"node_id": f.node_id}).fetchall()
-                cg._conn.execute("PRAGMA query_only = OFF")
-            except Exception as e:
-                log.warning("trace_route: Q5 查询失败 → %s，用 Q6 确认可达即可", str(e)[:100])
-                f.evidence += "\n\n[路由可达性分析] 可达（Q5 查询失败，Q6 确认可达）"
-                f.confidence = max(f.confidence, 0.7)
-                continue
-
+            # Q5：反向追溯调用链（18 层，只保留 kind=route）
+            log.info("trace_route: Q5 SQL → WHERE id = '%s' (depth<18)", f.node_id[:40])
+            chains = cg.get_call_chain_to_route(f.node_id)
             if not chains:
                 # Q5 没找到 route，但 Q6 确认可达 → 标记为可达但链太深
-                log.info("trace_route: %s — Q5 未找到 route（链可能超过 5 层），Q6 确认可达", f.node_id[:30])
-                f.evidence += "\n\n[路由可达性分析] 可达（调用链超过 5 层，无法提取 route 路径）"
+                log.info("trace_route: %s — Q5 未找到 route，Q6 确认可达", f.node_id[:30])
+                f.evidence += "\n\n[路由可达性分析] 可达（调用链超过 18 层）"
                 f.confidence = max(f.confidence, 0.6)
                 continue
 
@@ -100,14 +86,17 @@ def trace_route(state: AuditState) -> dict:
             log.info("trace_route: %s — 找到路由链 (depth=%d): %s", f.node_id[:30], chain["depth"], chain_path[:100])
 
             # 拉取链上每个方法的方法体
+            log.info("trace_route: 拉取方法体（chain_ids=%s...）", chain_ids[:60])
             chain_bodies = cg.get_chain_bodies(sources_root, chain_ids)
+            log.info("trace_route: 方法体拉取完成，%d 个，总 %d 字符",
+                     len(chain_bodies), sum(len(v) for v in chain_bodies.values()))
 
-            # 渲染 prompt 并调 AI
+            # 渲染 prompt
             prompt = _render_prompt(f, chain_path, chain_bodies)
-            log.info("trace_route: 发送 AI 可达性分析（链 %d 层）", len(chain_bodies))
-            print(f"\n===== 可达性分析 prompt =====\n{prompt[:1500]}\n===== 结束 =====\n")
+            log.info("trace_route: prompt 渲染完成，%d 字符，发送 AI...", len(prompt))
 
             result = call_reachability_llm(prompt)
+            log.info("trace_route: AI 返回完成")
 
             print(f"\n===== AI 可达性结果 =====")
             print(f"  reachable:   {result.reachable}")
