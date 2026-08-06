@@ -32,8 +32,6 @@ ORDER BY file_path, start_line
 
 # ---------------------------------------------------------------------------
 # Q2 — 调用边（按入口方法 nodeid 查询，多行）
-# 用 e.source = :node_id 直接查，不再 join n1 + filter file_path。
-# 多行返回，调用方需聚合。
 # ---------------------------------------------------------------------------
 
 Q2_CALL_EDGES = """
@@ -44,15 +42,13 @@ SELECT
   n2.start_line     AS callee_line,
   e.kind            AS edge_kind
 FROM edges e
-JOIN nodes n2 ON e.target = n2.id
+INNER JOIN nodes n2 ON e.target = n2.id
 WHERE e.source = :node_id
 ORDER BY n2.start_line
 """
 
 # ---------------------------------------------------------------------------
 # Q3 — 成员字段（按 nodeid 查同文件字段）
-# 用子查询从 node_id 取 file_path，再查同文件的 field 节点。
-# 用于构建 field 段（数据流源 / state 上下文）。
 # ---------------------------------------------------------------------------
 
 Q3_FIELDS_BY_NODE = """
@@ -65,9 +61,6 @@ ORDER BY qualified_name
 
 # ---------------------------------------------------------------------------
 # Q4 — 被调方法元数据（按入口方法 nodeid 查 callees，仅 kind='calls'）
-# 用 e.source = :node_id 直接查，不再 join n1 + filter file_path。
-# 返回 callee 的 nodeid + 行范围，客户端据此取方法体构建 {nodeid: body} 字典。
-# 过滤 e.kind='calls'，排除 references/decorates/instantiates 噪声。
 # ---------------------------------------------------------------------------
 
 Q4_CALLEE_META = """
@@ -78,7 +71,7 @@ SELECT DISTINCT
   n2.start_line     AS callee_start_line,
   n2.end_line       AS callee_end_line
 FROM edges e
-JOIN nodes n2 ON e.target = n2.id
+INNER JOIN nodes n2 ON e.target = n2.id
 WHERE e.source = :node_id
   AND e.kind = 'calls'
 """
@@ -103,8 +96,8 @@ WITH RECURSIVE chain AS (
          n1.qualified_name || ' -> ' || c.chain_path,
          n1.id || ',' || c.chain_ids
   FROM chain c
-  JOIN edges e ON e.target = c.id AND e.kind IN ('calls', 'references')
-  JOIN nodes n1 ON e.source = n1.id
+  inner JOIN edges e ON e.target = c.id AND e.kind IN ('calls', 'references')
+  inner JOIN nodes n1 ON e.source = n1.id
   WHERE c.depth < 10
 )
 SELECT id, qualified_name, kind, file_path, start_line, end_line, depth, chain_path, chain_ids

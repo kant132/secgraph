@@ -52,6 +52,7 @@ def trace_route(state: AuditState) -> dict:
     with CodegraphClient(codegraph_db) as cg:
         for f in findings:
             # Q5：反向追溯调用链
+            log.info("trace_route: Q5 SQL → WITH RECURSIVE chain AS (...) WHERE id = '%s'", f.node_id[:40])
             chains = cg.get_call_chain_to_route(f.node_id)
             if not chains:
                 log.info("trace_route: %s — 无 route 可达链（可能不是路由入口方法）", f.node_id[:30])
@@ -69,6 +70,7 @@ def trace_route(state: AuditState) -> dict:
             # 渲染 prompt 并调 AI
             prompt = _render_prompt(f, chain_path, chain_bodies)
             log.info("trace_route: 发送 AI 可达性分析（链 %d 层）", len(chain_bodies))
+            log.info("trace_route: Q5 SQL → node_id=%s, chain_path=%s", f.node_id[:30], chain_path[:100])
             print(f"\n===== 可达性分析 prompt =====\n{prompt[:1500]}\n===== 结束 =====\n")
 
             result = call_reachability_llm(prompt)

@@ -26,7 +26,7 @@ def _render_template(task) -> str:
     Uses str.replace (not str.format) to avoid collision with literal {} in the
     JSON output section of the template."""
     fields_text = "\n".join(
-        f"  {f.id}: {f.qualified_name}  (line {f.start_line})" for f in task.fields
+        f"  {f.qualified_name}  (line {f.start_line})" for f in task.fields
     ) or "  (none)"
 
     methods_json = json.dumps(task.method_bodies, indent=2, ensure_ascii=False) if task.method_bodies else "{}"
