@@ -37,6 +37,9 @@ def _build_state_summary(state: AuditState) -> str:
     confirmed = sum(1 for f in findings if f.poc_result == "confirmed")
     denied = sum(1 for f in findings if f.poc_result == "denied")
     pending = sum(1 for f in findings if not f.poc_result)
+    work_list = state.get("work_list", [])
+    audit_index = state.get("audit_index", 0)
+    remaining = len(work_list) - audit_index if work_list else 0
 
     return (
         f"findings: {len(findings)} 个\n"
@@ -46,6 +49,7 @@ def _build_state_summary(state: AuditState) -> str:
         f"  denied: {denied}\n"
         f"  pending（无 poc_result）: {pending}\n"
         f"  未分析调用链（需要 trace）: {len(findings) - traced}\n"
+        f"  discovery 剩余未审: {remaining} 个（audit_index={audit_index}/{len(work_list) if work_list else 0}）\n"
         f"  需要验证（有 payload 无 poc_result）: {pending}"
     )
 
@@ -68,20 +72,23 @@ def supervisor(state: AuditState) -> dict:
         reasoning = decision.reasoning
     except Exception as e:
         log.warning("[supervisor] LLM 调用失败 → %s，降级为规则路由", e)
-        # 降级：硬编码规则
         findings = state.get("findings", [])
         work_list = state.get("work_list", [])
+        audit_index = state.get("audit_index", 0)
+        remaining = len(work_list) - audit_index if work_list else 0
+
         if not work_list and not findings:
-            next_agent = "FINISH"  # 无方法可审，直接结束
+            next_agent = "FINISH"
         elif not findings:
-            next_agent = "FINISH"
+            next_agent = "FINISH" if not work_list else "discovery"
         elif not all("[路由可达性分析]" in (f.evidence or "") for f in findings):
-            next_agent = "trace"
+            next_agent = "trace"  # 有 findings 但没分析调用链
         elif all(f.poc_result for f in findings):
-            next_agent = "FINISH"
+            # 所有 findings 都验证完了，如果还有剩余未审 → 继续 discovery
+            next_agent = "discovery" if remaining > 0 else "FINISH"
         else:
-            next_agent = "verify"
-        reasoning = f"降级路由 → {next_agent}"
+            next_agent = "verify"  # 已分析调用链但没验证
+        reasoning = f"降级路由 → {next_agent} (remaining={remaining})"
 
     print(f"  → 决定: {next_agent}")
     print(f"  → 理由: {reasoning}")
