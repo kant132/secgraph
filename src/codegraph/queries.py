@@ -121,7 +121,7 @@ WITH RECURSIVE reachable AS (
   UNION
   SELECT n2.id, r.depth + 1
   FROM reachable r
-  INNER JOIN edges e ON e.source = r.id AND e.kind = 'calls'
+  INNER JOIN edges e ON e.source = r.id AND e.kind IN ('calls', 'references')
   INNER JOIN nodes n2 ON e.target = n2.id
   WHERE r.depth < 18
 )
@@ -147,7 +147,7 @@ WHERE n.kind = 'method'
       UNION
       SELECT n2.id, r.depth + 1
       FROM reachable r
-      INNER JOIN edges e ON e.source = r.id AND e.kind = 'calls'
+      INNER JOIN edges e ON e.source = r.id AND e.kind IN ('calls', 'references')
       INNER JOIN nodes n2 ON e.target = n2.id
       WHERE r.depth < 18
     )

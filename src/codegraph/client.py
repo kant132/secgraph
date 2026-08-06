@@ -31,18 +31,13 @@ class CodegraphClient:
     # ---- Q1: 入口方法发现 -----------------------------------------------
 
     def list_entry_methods(self, pkg_prefix: str, limit: int | None = None) -> list[MethodNode]:
-        """Q7 — route 可达的 public 带参方法（只审 route 能到达的方法，减少审计量）。
-        如果 Q7 返回空，回退到 Q1（全量入口方法）。"""
+        """Q1 + Q6 过滤 — 先查所有入口方法，再用 Q6 route 可达集过滤。
+        route 可达集为空（无 route 节点）时返回全量。"""
         pattern = f"%{pkg_prefix}%"
-        # 先用 Q7（route 可达交集）
-        rows = self._conn.execute(Q7_ROUTE_REACHABLE_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
-        if not rows:
-            # 回退到 Q1
-            log.info("codegraph: Q7 无结果，回退到 Q1 全量入口方法")
-            rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
-        else:
-            log.info("codegraph: Q7 route 可达入口方法 %d 个", len(rows))
-        methods = [
+
+        # Q1: 全量入口方法
+        rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
+        all_methods = [
             MethodNode(
                 id=r["id"],
                 qualified_name=r["qualified_name"],
@@ -54,6 +49,24 @@ class CodegraphClient:
             )
             for r in rows
         ]
+        log.info("codegraph: Q1 全量入口方法 %d 个", len(all_methods))
+
+        # Q6: route 正向 18 层可达 nodeid 集合
+        route_rows = self._conn.execute(Q6_ROUTE_REACHABLE_NODES).fetchall()
+        route_set = {r["id"] for r in route_rows}
+        log.info("codegraph: Q6 route 可达 nodeid 集合 %d 个", len(route_set))
+
+        if route_set:
+            # 过滤：只保留 route 可达的方法
+            filtered = [m for m in all_methods if m.id in route_set]
+            removed = len(all_methods) - len(filtered)
+            log.info("codegraph: route 过滤后 %d 个（过滤掉 %d 个不可达）",
+                     len(filtered), removed)
+            methods = filtered
+        else:
+            log.info("codegraph: 无 route 节点，跳过过滤，使用全量")
+            methods = all_methods
+
         if limit is not None:
             methods = methods[:limit]
         return methods
