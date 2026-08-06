@@ -24,8 +24,14 @@ _TEMPLATE = _TEMPLATE.resolve()
 
 
 def _render_prompt(f: Finding, chain_path: str, chain_bodies: dict[str, str]) -> str:
-    """填充路由可达性分析 prompt 模板。"""
-    bodies_json = json.dumps(chain_bodies, indent=2, ensure_ascii=False) if chain_bodies else "{}"
+    """填充路由可达性分析 prompt 模板。
+    把调用链路径 + 方法体合并成一个完整调用链文本，不拆成两部分。"""
+    # 合并：chain_ids 按顺序从 route → vuln，每个 body 已经是 "// fqn\n<body>" 格式
+    # 拼成：// fqn\n<body>\n→\n// fqn\n<body>\n→\n...
+    chain_text = "\n→\n".join(
+        body for body in chain_bodies.values()
+    ) if chain_bodies else "(无方法体)"
+
     tmpl = _TEMPLATE.read_text(encoding="utf-8")
     return (
         tmpl
@@ -33,8 +39,7 @@ def _render_prompt(f: Finding, chain_path: str, chain_bodies: dict[str, str]) ->
         .replace("{severity}", f.severity)
         .replace("{evidence}", f.evidence)
         .replace("{payload}", f.payload or "")
-        .replace("{chain_path}", chain_path)
-        .replace("{chain_bodies}", bodies_json)
+        .replace("{call_chain}", chain_text)
     )
 
 

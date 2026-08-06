@@ -1,4 +1,4 @@
-你是 Java 安全审计专家。判断以下漏洞是否能从 HTTP 路由到达，并更新 payload，让payload的参数满足业务要求
+你是 Java 安全审计专家。判断以下漏洞是否能从 HTTP 路由到达，并更新 payload，让payload的参数满足业务要求。
 
 ## 漏洞信息
 - 漏洞类型: {vuln_type}
@@ -6,17 +6,15 @@
 - 证据: {evidence}
 - 原始 payload: {payload}
 
-## 调用链（从路由入口到漏洞方法）
-{chain_path}
-
-## 调用链方法体（从路由入口到漏洞方法，逐层）
-{chain_bodies}
+## 完整调用链（route → 漏洞方法，每层含 FQN + 方法体）
+{call_chain}
 
 ## 分析要求
 1、沿调用链从路由入口逐层分析数据流：用户输入是否能到达漏洞方法
 2、中间层是否有消毒/权限校验阻断污点传播
 3、如果可达：更新 payload
 4、如果不可达：说明哪层阻断了，为什么阻断
+5、如果分析后确认是安全的（如用了参数化查询、有消毒方法），返回 reachable=false
 
 ## payload 格式要求（严格）
 updated_payload 必须是完整的 HTTP 请求格式，不能只写注入字符串：
