@@ -69,7 +69,7 @@ def _create_llm(role: str) -> ChatOpenAI:
         model=model,
         api_key=key,
         base_url=base,
-        temperature=0.1,
+        temperature=0.3,
     )
     log.info("llm[%s]: model=%s base_url=%s", role, model, base)
     return llm
