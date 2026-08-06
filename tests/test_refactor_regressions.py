@@ -231,6 +231,68 @@ class TestTraceRouteFallbackTag:
         assert "LLM 分析失败" in f.evidence
         assert f.confidence == pytest.approx(0.24)
 
+    def test_trace_route_invocation_writes_tag_when_llm_fails(self, tmp_path):
+        """集成测试：实际跑 trace_route()，mock LLM 抛异常，断言 finding 被正确标记。
+        比 pattern-based 版本更紧 — refactor 改 except 分支文案时这个测试会跟动。
+        """
+        from src.codegraph import CodegraphClient
+        from src.nodes.trace_route import trace_route
+        from src.state import EVIDENCE_TRACE_TAG, Finding
+
+        db_path = str(tmp_path / "codegraph.db")
+
+        # 构造 route_reachable 可达的 DB：route 节点 → method 节点（反向链 method→route）
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+        CREATE TABLE nodes (
+            id TEXT PRIMARY KEY, qualified_name TEXT, name TEXT,
+            kind TEXT, signature TEXT, file_path TEXT,
+            start_line INT, end_line INT
+        );
+        CREATE TABLE edges (
+            source TEXT, target TEXT, kind TEXT,
+            caller_name TEXT, caller_line INT,
+            callee_qualified TEXT, callee_name TEXT,
+            callee_file TEXT, callee_line INT,
+            callee_id TEXT, callee_start_line INT, callee_end_line INT
+        );
+        INSERT INTO nodes VALUES
+            ('route:login', 'r.LoginController', 'LoginController', 'route', 'sig', 'LoginController.java', 1, 50),
+            ('method:victim', 'com.x.Victim.foo', 'foo', 'method', 'sig', 'Victim.java', 10, 20);
+        -- route:login 调 method:victim（正向：route → victim）
+        -- ROUTE_REACHABLE_INIT 沿 edges FROM route 走，所以 victim 会被加入 route_reachable
+        INSERT INTO edges VALUES
+            ('route:login', 'method:victim', 'calls', 'LoginController', 30,
+             'com.x.Victim.foo', 'foo', 'Victim.java', 10,
+             'method:victim', 10, 20);
+        """)
+        conn.commit()
+        conn.close()
+
+        f = Finding(
+            file_path="Victim.java", node_id="method:victim", vuln_type="SQLi",
+            severity="high", evidence="audit evidence", payload="", confidence=0.8,
+        )
+        state = {
+            "codegraph_db": db_path,
+            "sources_root": ".",  # 源码路径不存在也无妨 — get_chain_bodies 会返回 source-not-found 占位
+            "findings": [f],
+        }
+
+        # mock LLM 抛异常 — 触发 trace_route 的 except 分支
+        with patch("src.nodes.trace_route.call_reachability_llm",
+                   side_effect=RuntimeError("LLM rate limit")):
+            result = trace_route(state)
+
+        # fallback tag 必须写入；confidence 必须衰减
+        out = result["findings"][0]
+        assert EVIDENCE_TRACE_TAG in out.evidence
+        assert "LLM 分析失败" in out.evidence
+        assert "LLM rate limit" in out.evidence
+        assert out.confidence == pytest.approx(0.24), (
+            f"confidence should be 0.8 * 0.3 = 0.24, got {out.confidence}"
+        )
+
 
 class TestPromptsRender:
     """prompts.render() 基础行为 — 防止回归。"""
