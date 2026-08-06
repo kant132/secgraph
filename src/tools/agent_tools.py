@@ -82,8 +82,10 @@ def create_agent_tools(project_path: str, http_client: HttpClient) -> list:
     return registry.build()
 
 
-def create_tool_registry(project_path: str, http_client: HttpClient) -> ToolRegistry:
-    """创建工具注册器（和 build_agent_tools 一样，但返回 registry 对象，可以运行时 add）。"""
+def create_tool_registry(project_path: str, http_client: HttpClient,
+                         enable_chrome_devtools: bool = False) -> ToolRegistry:
+    """创建工具注册器（和 build_agent_tools 一样，但返回 registry 对象，可以运行时 add）。
+    enable_chrome_devtools: 是否注册 Chrome DevTools MCP 工具（需 Chrome 144+ 或 --remote-debugging-port）。"""
     registry = ToolRegistry()
 
     def _explore_code(query: str) -> str:
@@ -144,6 +146,15 @@ def create_tool_registry(project_path: str, http_client: HttpClient) -> ToolRegi
         path="文件路径",
         content="文件内容",
     )
+
+    # 可选：注册 Chrome DevTools MCP 工具（autoConnect 到用户正在运行的 Chrome）
+    if enable_chrome_devtools:
+        from .chrome_devtools import register_chrome_devtools_tools
+        mcp = register_chrome_devtools_tools(registry, use_auto_connect=True)
+        if mcp.start():
+            log.info("agent_tools: Chrome DevTools MCP 已启动并注册（6 个工具）")
+        else:
+            log.warning("agent_tools: Chrome DevTools MCP 启动失败，跳过")
 
     return registry
 
