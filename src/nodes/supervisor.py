@@ -70,14 +70,17 @@ def supervisor(state: AuditState) -> dict:
         log.warning("[supervisor] LLM 调用失败 → %s，降级为规则路由", e)
         # 降级：硬编码规则
         findings = state.get("findings", [])
-        if not findings:
-            next_agent = "discovery"
+        work_list = state.get("work_list", [])
+        if not work_list and not findings:
+            next_agent = "FINISH"  # 无方法可审，直接结束
+        elif not findings:
+            next_agent = "FINISH"
         elif not all("[路由可达性分析]" in (f.evidence or "") for f in findings):
-            next_agent = "trace"  # 有 findings 但没分析调用链
+            next_agent = "trace"
         elif all(f.poc_result for f in findings):
             next_agent = "FINISH"
         else:
-            next_agent = "verify"  # 已分析调用链但没验证
+            next_agent = "verify"
         reasoning = f"降级路由 → {next_agent}"
 
     print(f"  → 决定: {next_agent}")
