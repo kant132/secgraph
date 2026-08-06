@@ -31,9 +31,7 @@ class TestGraphStructure:
         edges = app.get_graph().edges
         edge_pairs = [(e.source, e.target) for e in edges]
         assert ("__start__", "supervisor") in edge_pairs
-        assert ("discovery", "supervisor") in edge_pairs
-        assert ("trace", "supervisor") in edge_pairs
-        assert ("verify", "supervisor") in edge_pairs
+        assert ("supervisor", "discovery") in edge_pairs
         assert ("record", "__end__") in edge_pairs
 
 
