@@ -42,7 +42,12 @@ def _add_no_markdown_prefix(prompt: str) -> str:
     return _NO_MARKDOWN_PREFIX + prompt
 
 
-_raw_llm = None
+# 三个独立 LLM 实例 — 可配不同模型/密钥
+_audit_llm_instance = None    # 漏洞发现
+_trace_llm_instance = None   # 调用链分析
+_verify_llm_instance = None  # 漏洞验证
+
+# 结构化输出缓存（每个角色独立）
 _audit_llm = None
 _reach_llm = None
 _explore_llm = None
@@ -51,17 +56,53 @@ _retry_llm = None
 _supervisor_llm = None
 
 
+def _create_llm(role: str) -> ChatOpenAI:
+    """按角色创建独立 LLM 实例。
+    role: 'audit' | 'trace' | 'verify'
+    优先读角色专用配置（AUDIT_LLM_*），没有则回退到通用配置（LLM_*）。
+    """
+    key = os.getenv(f"{role.upper()}_LLM_API_KEY") or os.getenv("LLM_API_KEY", "")
+    base = os.getenv(f"{role.upper()}_LLM_BASE_URL") or os.getenv("LLM_BASE_URL", "")
+    model = os.getenv(f"{role.upper()}_LLM_MODEL") or os.getenv("LLM_MODEL", "glm-5.1")
+
+    llm = ChatOpenAI(
+        model=model,
+        api_key=key,
+        base_url=base,
+        temperature=0.1,
+    )
+    log.info("llm[%s]: model=%s base_url=%s", role, model, base)
+    return llm
+
+
+def _get_audit_llm_raw() -> ChatOpenAI:
+    """漏洞发现用 LLM"""
+    global _audit_llm_instance
+    if _audit_llm_instance is None:
+        _audit_llm_instance = _create_llm("audit")
+    return _audit_llm_instance
+
+
+def _get_trace_llm_raw() -> ChatOpenAI:
+    """调用链分析用 LLM"""
+    global _trace_llm_instance
+    if _trace_llm_instance is None:
+        _trace_llm_instance = _create_llm("trace")
+    return _trace_llm_instance
+
+
+def _get_verify_llm_raw() -> ChatOpenAI:
+    """漏洞验证用 LLM"""
+    global _verify_llm_instance
+    if _verify_llm_instance is None:
+        _verify_llm_instance = _create_llm("verify")
+    return _verify_llm_instance
+
+
+# 旧接口兼容（supervisor 用 verify LLM）
 def _get_raw_llm() -> ChatOpenAI:
-    global _raw_llm
-    if _raw_llm is None:
-        _raw_llm = ChatOpenAI(
-            model=os.getenv("LLM_MODEL", "glm-5.1"),
-            api_key=os.getenv("LLM_API_KEY", ""),
-            base_url=os.getenv("LLM_BASE_URL", ""),
-            temperature=0.1,
-        )
-        log.info("llm: model=%s base_url=%s", os.getenv("LLM_MODEL"), os.getenv("LLM_BASE_URL"))
-    return _raw_llm
+    """默认用 verify LLM（supervisor 路由决策用）"""
+    return _get_verify_llm_raw()
 
 
 def _strip_markdown_json(text: str) -> str:
@@ -83,12 +124,15 @@ def _strip_markdown_json(text: str) -> str:
     return text
 
 
-def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
+def _call_structured(prompt: str, model_cls, cached_llm_attr: str,
+                     raw_llm_getter=None):
     """通用结构化输出调用 — 带 fallback + 调试输出。
 
     1. 先试 with_structured_output(method="json_mode")（比默认 function_calling 更兼容）
     2. 失败 → 回退到 raw LLM + 剥 markdown + 手动 json 解析
     3. 都失败 → 打印 raw 返回内容方便调试 → raise
+
+    raw_llm_getter: 指定用哪个 LLM 实例（_get_audit_llm_raw / _get_trace_llm_raw / _get_verify_llm_raw）
     """
     global _audit_llm, _reach_llm, _explore_llm, _verify_llm, _retry_llm, _supervisor_llm
     cached = {"_audit_llm": _audit_llm, "_reach_llm": _reach_llm,
@@ -97,8 +141,8 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
 
     structured_llm = cached.get(cached_llm_attr)
     if structured_llm is None:
-        # 用 json_mode 而非默认 function_calling — 更广泛兼容（minimax/GLM 等）
-        structured_llm = _get_raw_llm().with_structured_output(model_cls, method="json_mode")
+        llm = raw_llm_getter() if raw_llm_getter else _get_raw_llm()
+        structured_llm = llm.with_structured_output(model_cls, method="json_mode")
         globals()[cached_llm_attr] = structured_llm
 
     # 尝试 1: with_structured_output (json_mode)
@@ -113,7 +157,8 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
     raw_text = ""
     clean_json = ""
     try:
-        raw_resp = _get_raw_llm().invoke(_add_no_markdown_prefix(prompt))
+        llm = raw_llm_getter() if raw_llm_getter else _get_raw_llm()
+        raw_resp = llm.invoke(_add_no_markdown_prefix(prompt))
         raw_text = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
 
         # 完整打印 raw LLM 返回（log，不截断）
@@ -138,57 +183,39 @@ def _call_structured(prompt: str, model_cls, cached_llm_attr: str):
 
 
 # ---------------------------------------------------------------------------
-# 各 LLM 入口
+# 各 LLM 入口 — 按角色使用不同 LLM 实例
 # ---------------------------------------------------------------------------
 
-def get_audit_llm():
-    return _get_raw_llm().with_structured_output(AuditResult)
-
 def call_audit_llm(prompt: str) -> AuditResult:
-    """结构化审计调用 — 返回 AuditResult（{nodeid: VulnDetail}）。"""
-    return _call_structured(prompt, AuditResult, "_audit_llm")
+    """漏洞发现 — 用 AUDIT_LLM_* 配置"""
+    return _call_structured(prompt, AuditResult, "_audit_llm", _get_audit_llm_raw)
 
-
-def get_reachability_llm():
-    return _get_raw_llm().with_structured_output(ReachabilityResult)
 
 def call_reachability_llm(prompt: str) -> ReachabilityResult:
-    """结构化可达性调用 — 返回 ReachabilityResult。"""
-    return _call_structured(prompt, ReachabilityResult, "_reach_llm")
+    """调用链分析 — 用 TRACE_LLM_* 配置"""
+    return _call_structured(prompt, ReachabilityResult, "_reach_llm", _get_trace_llm_raw)
 
-
-def get_exploration_llm():
-    return _get_raw_llm().with_structured_output(LoginExplorationResult)
 
 def call_exploration_llm(prompt: str) -> LoginExplorationResult:
-    """结构化登录探索调用 — 返回 LoginExplorationResult。"""
-    return _call_structured(prompt, LoginExplorationResult, "_explore_llm")
+    """登录探索 — 用 VERIFY_LLM_* 配置"""
+    return _call_structured(prompt, LoginExplorationResult, "_explore_llm", _get_verify_llm_raw)
 
-
-def get_verification_llm():
-    return _get_raw_llm().with_structured_output(PoCVerificationResult)
 
 def call_verification_llm(prompt: str) -> PoCVerificationResult:
-    """结构化 PoC 验证调用 — 返回 PoCVerificationResult。"""
-    return _call_structured(prompt, PoCVerificationResult, "_verify_llm")
+    """PoC 验证 — 用 VERIFY_LLM_* 配置"""
+    return _call_structured(prompt, PoCVerificationResult, "_verify_llm", _get_verify_llm_raw)
 
-
-def get_retry_llm():
-    return _get_raw_llm().with_structured_output(PayloadRetryResult)
 
 def call_retry_llm(prompt: str) -> PayloadRetryResult:
-    """结构化 payload 重构调用 — 返回 PayloadRetryResult。"""
-    return _call_structured(prompt, PayloadRetryResult, "_retry_llm")
+    """payload 重构 — 用 TRACE_LLM_* 配置"""
+    return _call_structured(prompt, PayloadRetryResult, "_retry_llm", _get_trace_llm_raw)
 
-
-def get_supervisor_llm():
-    return _get_raw_llm().with_structured_output(SupervisorDecision)
 
 def call_supervisor_llm(prompt: str) -> SupervisorDecision:
-    """Supervisor 路由调用 — 返回 SupervisorDecision（next_agent + reasoning）。"""
-    return _call_structured(prompt, SupervisorDecision, "_supervisor_llm")
+    """Supervisor 路由 — 用 VERIFY_LLM_* 配置"""
+    return _call_structured(prompt, SupervisorDecision, "_supervisor_llm", _get_verify_llm_raw)
 
 
 def call_llm(prompt: str) -> str:
-    """原始文本调用（备用）。"""
-    return _get_raw_llm().invoke(prompt).content
+    """原始文本调用（备用）— 用 verify LLM"""
+    return _get_verify_llm_raw().invoke(prompt).content
