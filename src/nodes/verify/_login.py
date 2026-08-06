@@ -60,8 +60,8 @@ def write_login_info(project_path: str, info: dict) -> None:
 # Playwright CDP + AI 探索（一个 adapter）
 # ---------------------------------------------------------------------------
 
-_LOGIN_TEMPLATE = Path(__file__).parent.parent.parent / "prompts" / "login_exploration_template.md"
-_LOGIN_TEMPLATE = _LOGIN_TEMPLATE.resolve()
+_LOGIN_TEMPLATE_PATH = (Path(__file__).parent.parent.parent / "prompts" / "login_exploration_template.md").resolve()
+_LOGIN_TEMPLATE_TEXT = _LOGIN_TEMPLATE_PATH.read_text(encoding="utf-8")
 
 
 def _extract_forms_text(page) -> str:
@@ -87,9 +87,8 @@ def _extract_forms_text(page) -> str:
 
 
 def _render_exploration_prompt(target_url: str, forms_text: str, username: str, password: str) -> str:
-    tmpl = _LOGIN_TEMPLATE.read_text(encoding="utf-8")
     return (
-        tmpl
+        _LOGIN_TEMPLATE_TEXT
         .replace("{target_url}", target_url)
         .replace("{forms_text}", forms_text)
         .replace("{username}", username)

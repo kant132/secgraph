@@ -38,31 +38,31 @@ def discovery_agent(state: AuditState) -> dict:
         log.info("[discovery] 继续审计，当前 %d/%d", audit_index, len(work_list))
 
     # 2. 查 memory（从 codegraph.db）— 置信度 >= 0.9 直接复用
+    #    对每个待审方法都查（不是只查 audit_index==0）— 否则 memory cache 形同虚设
     codegraph_db_path = state.get("codegraph_db", "")
     cached_findings: list[Finding] = []
 
-    if codegraph_db_path and audit_index == 0:
+    if codegraph_db_path and audit_index < len(work_list):
         with CodegraphClient(codegraph_db_path) as cg:
             cg.init_memory_table()
-            # 只查当前 audit_index 位置的方法是否在 memory
-            if audit_index < len(work_list):
-                task = work_list[audit_index]
-                for node_id in task.method_bodies:
-                    memory = cg.lookup_memory(node_id, MEMORY_CONFIDENCE_THRESHOLD)
-                    if memory:
-                        log.info("[discovery] memory 命中: %s (confidence=%.2f) → 跳过",
-                                 node_id[:30], memory["confidence"])
-                        cached_findings.append(Finding(
-                            file_path=task.file_path,
-                            node_id=node_id,
-                            vuln_type=memory["vuln_type"],
-                            severity=memory.get("status", "pending"),
-                            evidence=memory["security_risk"],
-                            payload="",
-                            confidence=memory["confidence"],
-                        ))
-                        audit_index += 1
-                        state["audit_index"] = audit_index
+            # 查当前 audit_index 位置的方法是否在 memory（每个 task 一个 method）
+            task = work_list[audit_index]
+            node_id = next(iter(task.method_bodies))
+            memory = cg.lookup_memory(node_id, MEMORY_CONFIDENCE_THRESHOLD)
+            if memory:
+                log.info("[discovery] memory 命中: %s (confidence=%.2f) → 跳过",
+                         node_id[:30], memory["confidence"])
+                cached_findings.append(Finding(
+                    file_path=task.file_path,
+                    node_id=node_id,
+                    vuln_type=memory["vuln_type"],
+                    severity=memory.get("status", "pending"),
+                    evidence=memory["security_risk"],
+                    payload="",
+                    confidence=memory["confidence"],
+                ))
+                audit_index += 1
+                state["audit_index"] = audit_index
 
     log.info("[discovery] memory 命中 %d 个", len(cached_findings))
 

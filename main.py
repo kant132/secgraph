@@ -30,13 +30,13 @@ log = logging.getLogger("secgraph.main")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="secgraph — langraph Java security audit")
+    parser = argparse.ArgumentParser(description="secgraph — langgraph Java security audit")
     parser.add_argument("--project", required=True,
                         help="target project path (e.g. D:/jar/webgoat)")
     parser.add_argument("--group-id", required=True,
                         help="business package prefix (e.g. org.owasp.webgoat)")
     parser.add_argument("--mode", default="dev", choices=["dev", "runtime"],
-                        help="dev=10 files+debug logs, runtime=full sweep")
+                        help="dev=20 files+debug logs, runtime=full sweep")
     args = parser.parse_args()
 
     cfg = Config.from_args(project_path=args.project, group_id=args.group_id, mode=args.mode)

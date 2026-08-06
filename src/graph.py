@@ -22,67 +22,55 @@ from .nodes.agents.trace import trace_agent
 from .nodes.agents.verify import verify_agent
 from .nodes.record import record
 from .nodes.supervisor import supervisor
-from .state import AuditState
+from .state import EVIDENCE_TRACE_TAG, AuditState
+
+
+def _remaining(state: AuditState) -> int:
+    """work_list 中尚未审计的方法数。"""
+    work_list = state.get("work_list", [])
+    audit_index = state.get("audit_index", 0)
+    return max(0, len(work_list) - audit_index)
+
+
+def _has_tag(f, tag: str) -> bool:
+    """finding.evidence 是否包含路由可达性分析标记。"""
+    return tag in (f.evidence or "")
 
 
 def _after_discovery(state: AuditState) -> str:
-    """discovery 完成后直接路由：
-    有 finding 未分析调用链 → trace
-    有剩余方法 → discovery（继续审下一个）
-    都没有 → record"""
+    """discovery 完成后直接路由：有 finding 未分析 → trace；剩余方法 → discovery；否则 record。"""
     findings = state.get("findings", [])
-    work_list = state.get("work_list", [])
-    audit_index = state.get("audit_index", 0)
-    remaining = len(work_list) - audit_index if work_list else 0
 
     # 有未分析调用链的 finding → 直接 trace
-    untraced = [f for f in findings if "[路由可达性分析]" not in (f.evidence or "")]
-    if untraced:
+    if any(not _has_tag(f, EVIDENCE_TRACE_TAG) for f in findings):
         return "trace"
 
     # 还有剩余方法 → 继续审
-    if remaining > 0:
+    if _remaining(state) > 0:
         return "discovery"
 
     return "record"
 
 
 def _after_trace(state: AuditState) -> str:
-    """trace 完成后直接路由：
-    有可达 finding 未验证 → verify
-    不可达 → 继续审下一个方法"""
+    """trace 完成后直接路由：可达未验证 → verify；剩余方法 → discovery；否则 record。"""
     findings = state.get("findings", [])
-    work_list = state.get("work_list", [])
-    audit_index = state.get("audit_index", 0)
-    remaining = len(work_list) - audit_index if work_list else 0
 
     # 有已分析调用链但未验证的 finding → verify
-    traced_unverified = [
-        f for f in findings
-        if "[路由可达性分析]" in (f.evidence or "") and not f.poc_result
-    ]
-    if traced_unverified:
+    if any(_has_tag(f, EVIDENCE_TRACE_TAG) and not f.poc_result for f in findings):
         return "verify"
 
     # 还有剩余方法 → 继续审
-    if remaining > 0:
+    if _remaining(state) > 0:
         return "discovery"
 
     return "record"
 
 
 def _after_verify(state: AuditState) -> str:
-    """verify 完成后直接路由：
-    有剩余方法 → 继续审
-    都审完 → record"""
-    work_list = state.get("work_list", [])
-    audit_index = state.get("audit_index", 0)
-    remaining = len(work_list) - audit_index if work_list else 0
-
-    # 还有剩余方法 → 继续审
-    if remaining > 0:
+    """verify 完成后直接路由：剩余方法 → discovery；否则 record。"""
+    if _remaining(state) > 0:
         return "discovery"
-
     return "record"
 
 
