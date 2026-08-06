@@ -164,6 +164,68 @@ class CodegraphClient:
                 row["start_line"], row["end_line"], row["qualified_name"])
         return f"[node not found: {node_id}]"
 
+    # ---- 审计记忆（直接存 codegraph.db，和代码索引同库）-------------------
+
+    def init_memory_table(self) -> None:
+        """在 codegraph.db 里建 audit_memory 表（如果不存在）。"""
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS audit_memory (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id         TEXT NOT NULL,
+            signature       TEXT NOT NULL,
+            input_validation TEXT DEFAULT '',
+            output_limitation TEXT DEFAULT '',
+            called_methods  TEXT DEFAULT '',
+            security_risk   TEXT NOT NULL,
+            vuln_type       TEXT NOT NULL,
+            confidence      REAL NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'pending',
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_node_id ON audit_memory(node_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_confidence ON audit_memory(confidence);
+        """)
+        self._conn.commit()
+
+    def save_memory(self, node_id: str, signature: str, vuln_type: str,
+                    security_risk: str, confidence: float, status: str = "pending",
+                    input_validation: str = "", output_limitation: str = "",
+                    called_methods: str = "") -> None:
+        """保存/更新审计记忆。按 node_id upsert。"""
+        existing = self._conn.execute(
+            "SELECT id FROM audit_memory WHERE node_id = ?", (node_id,)
+        ).fetchone()
+        if existing:
+            self._conn.execute("""
+                UPDATE audit_memory SET
+                    signature = ?, input_validation = ?, output_limitation = ?,
+                    called_methods = ?, security_risk = ?, vuln_type = ?,
+                    confidence = ?, status = ?, updated_at = datetime('now')
+                WHERE node_id = ?
+            """, (signature, input_validation, output_limitation,
+                  called_methods, security_risk, vuln_type,
+                  confidence, status, node_id))
+        else:
+            self._conn.execute("""
+                INSERT INTO audit_memory
+                    (node_id, signature, input_validation, output_limitation,
+                     called_methods, security_risk, vuln_type, confidence, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (node_id, signature, input_validation, output_limitation,
+                  called_methods, security_risk, vuln_type, confidence, status))
+        self._conn.commit()
+
+    def lookup_memory(self, node_id: str, min_confidence: float = 0.9) -> dict | None:
+        """查审计记忆。置信度 >= min_confidence 才返回（直接复用，不再审）。"""
+        row = self._conn.execute(
+            "SELECT * FROM audit_memory WHERE node_id = ? AND confidence >= ?",
+            (node_id, min_confidence)
+        ).fetchone()
+        if row:
+            return dict(row)
+        return None
+
     # ---- 生命周期 --------------------------------------------------------
 
     def close(self) -> None:

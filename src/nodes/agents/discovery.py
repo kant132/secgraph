@@ -12,7 +12,7 @@ import logging
 
 from ..discover import discover
 from ..audit import audit_file
-from ...db import FindingsDB
+from ...codegraph import CodegraphClient
 from ...state import AuditState, Finding
 
 log = logging.getLogger("secgraph.agents.discovery")
@@ -30,17 +30,18 @@ def discovery_agent(state: AuditState) -> dict:
     work_list = state.get("work_list", [])
     log.info("[discovery] discover 完成: %d 个方法", len(work_list))
 
-    # 2. 查 memory — 置信度 >= 0.9 的直接复用，不调 LLM
-    findings_db_path = state.get("findings_db", "")
+    # 2. 查 memory（从 codegraph.db，和代码索引同库）— 置信度 >= 0.9 直接复用
+    codegraph_db_path = state.get("codegraph_db", "")
     cached_findings: list[Finding] = []
     tasks_to_audit: list = []
 
-    if findings_db_path:
-        with FindingsDB(findings_db_path) as db:
+    if codegraph_db_path:
+        with CodegraphClient(codegraph_db_path) as cg:
+            cg.init_memory_table()
             for task in work_list:
                 # task.method_bodies 的 key 就是 nodeid
                 for node_id in task.method_bodies:
-                    memory = db.lookup_memory(node_id, MEMORY_CONFIDENCE_THRESHOLD)
+                    memory = cg.lookup_memory(node_id, MEMORY_CONFIDENCE_THRESHOLD)
                     if memory:
                         log.info("[discovery] memory 命中: %s (confidence=%.2f) → 跳过审计",
                                  node_id[:30], memory["confidence"])

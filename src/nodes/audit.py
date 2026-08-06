@@ -72,14 +72,15 @@ def audit_file(state: AuditState) -> dict:
             print(f"    security_risk: {detail.security_risk}")
     log.info("audit: ===== LLM 返回结束 =====")
 
-    # 保存审计记忆到 DB
-    from ..db import FindingsDB
-    findings_db_path = state.get("findings_db", "")
-    if findings_db_path:
-        with FindingsDB(findings_db_path) as db:
+    # 保存审计记忆到 codegraph.db（和代码索引同库）
+    codegraph_db_path = state.get("codegraph_db", "")
+    if codegraph_db_path:
+        from ..codegraph import CodegraphClient
+        with CodegraphClient(codegraph_db_path) as cg:
+            cg.init_memory_table()
             for nid, detail in (result.root or {}).items():
                 signature = f"{nid}:{detail.vuln_type}"
-                db.save_memory(
+                cg.save_memory(
                     node_id=nid,
                     signature=signature,
                     vuln_type=detail.vuln_type,
@@ -90,7 +91,7 @@ def audit_file(state: AuditState) -> dict:
                     output_limitation=detail.output_limitation,
                     called_methods=detail.called_methods,
                 )
-        log.info("audit: 审计记忆已保存 → %d 条", len(result.root or {}))
+        log.info("audit: 审计记忆已保存到 codegraph.db → %d 条", len(result.root or {}))
 
     new_findings: list[Finding] = []
     for node_id, detail in result.root.items():
