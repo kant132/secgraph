@@ -27,6 +27,12 @@ WHERE kind = 'method'
   AND language = 'java'
   AND signature NOT GLOB '*()'
   AND file_path LIKE :pkg_pattern
+  and file_path not like '%/bean/%'
+  and file_path not like '%/entity/%'
+  and file_path not like '%/foundation/%'
+  and file_path not like '%/it/%'
+  and file_path not like '%/opengaussdb/%'
+  and file_path not like '%/huawei/his/%'
 ORDER BY file_path, start_line
 """
 
