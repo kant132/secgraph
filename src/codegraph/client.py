@@ -6,13 +6,17 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
 from ..state import CallEdge, FieldNode, MethodNode
 from .queries import (
     Q1_ENTRY_METHODS, Q2_CALL_EDGES, Q3_FIELDS_BY_NODE, Q4_CALLEE_META, Q5_REVERSE_CHAIN,
+    Q6_ROUTE_REACHABLE_NODES, Q7_ROUTE_REACHABLE_ENTRY_METHODS,
 )
+
+log = logging.getLogger("secgraph.codegraph")
 
 
 class CodegraphClient:
@@ -27,10 +31,17 @@ class CodegraphClient:
     # ---- Q1: 入口方法发现 -----------------------------------------------
 
     def list_entry_methods(self, pkg_prefix: str, limit: int | None = None) -> list[MethodNode]:
-        """Q1 — 业务包内的 public 带参方法（入口方法），返回 nodeid 列表。
-        limit 按 method 数切片（dev 态限 10 个方法）。"""
+        """Q7 — route 可达的 public 带参方法（只审 route 能到达的方法，减少审计量）。
+        如果 Q7 返回空，回退到 Q1（全量入口方法）。"""
         pattern = f"%{pkg_prefix}%"
-        rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
+        # 先用 Q7（route 可达交集）
+        rows = self._conn.execute(Q7_ROUTE_REACHABLE_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
+        if not rows:
+            # 回退到 Q1
+            log.info("codegraph: Q7 无结果，回退到 Q1 全量入口方法")
+            rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
+        else:
+            log.info("codegraph: Q7 route 可达入口方法 %d 个", len(rows))
         methods = [
             MethodNode(
                 id=r["id"],

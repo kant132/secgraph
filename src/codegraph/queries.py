@@ -1,23 +1,18 @@
-"""codegraph 的 4 条 SQL 查询 — 修正后参数化，以 nodeid 为查询键。
+"""codegraph SQL 查询 — 以 nodeid 为查询键。
 
-相对 init_req.md 原版的修正：
-  1. Q1 补了 language='java'（原版漏了，会捞出 JS/TS 方法）
-  2. signature NOT GLOB '.*\\(\\)' 改成 NOT GLOB '*()'。
-     GLOB 用 shell-glob 语义：'.' 是字面量不是"任意字符"。
-     "签名以 () 结尾（无参方法）"的正确写法是 '*()'。
-  3. REGEXP 在原生 SQLite 不可用（无扩展）— 只用 GLOB。
-  4. 包前缀参数化为 :pkg_pattern（不硬编码 com/huawei）。
-  5. 所有按 file_path 过滤的查询改为按 node_id 过滤：
-     - Q1 直接返回入口方法 nodeid 列表（不再先查 file_path 再查方法）
-     - Q2/Q4 用 e.source = :node_id 直接查调用边（不再 join n1 + filter file_path）
-     - Q3 用子查询从 node_id 取 file_path 再查同文件字段
+查询策略：
+  Q1: 业务包内的 public 带参方法
+  Q2: 调用边
+  Q3: 成员字段
+  Q4: 被调方法体
+  Q5: 反向追溯 route 入口（18 层递归）
+  Q6: 正向从所有 route 节点向下 18 层遍历，找到所有关联 nodeid
+  Q7: Q6 结果与 Q1 结果取交集（只审 route 可达的方法）
 """
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Q1 — 入口方法发现（直接返回 nodeid 列表，不再先查 file_path）
-# 业务包前缀过滤，返回 public 带参方法的完整元数据。
-#   -- and  qualified_name like '%injectableQuery%'
+# Q1 — 入口方法发现（业务包前缀过滤）
 # ---------------------------------------------------------------------------
 
 Q1_ENTRY_METHODS = """
@@ -27,12 +22,12 @@ WHERE kind = 'method'
   AND language = 'java'
   AND signature NOT GLOB '*()'
   AND file_path LIKE :pkg_pattern
-  and file_path not like '%/bean/%'
-  and file_path not like '%/entity/%'
-  and file_path not like '%/foundation/%'
-  and file_path not like '%/it/%'
-  and file_path not like '%/opengaussdb/%'
-  and file_path not like '%/huawei/his/%'
+  AND file_path NOT LIKE '%/bean/%'
+  AND file_path NOT LIKE '%/entity/%'
+  AND file_path NOT LIKE '%/foundation/%'
+  AND file_path NOT LIKE '%/it/%'
+  AND file_path NOT LIKE '%/opengaussdb/%'
+  AND file_path NOT LIKE '%/huawei/his/%'
 ORDER BY file_path, start_line
 """
 
@@ -83,10 +78,10 @@ WHERE e.source = :node_id
 """
 
 # ---------------------------------------------------------------------------
-# Q5 — 反向调用链追溯（从 vuln 方法往上找 kind='route' 的 HTTP 入口）
-# 递归 CTE：沿 edges 反向走（e.target = 当前节点, e.kind='calls'），
-# 逐层往上找调用方，直到找到 kind='route' 或达到深度上限。
-# 返回每条路径的 route 节点 + chain_path（人类可读）+ chain_ids（机器取方法体用）。
+# Q5 — 反向调用链追溯（从方法往上找 route，18 层递归）
+# 递归 CTE：沿 edges 反向走（e.target = 当前节点, e.kind IN ('calls','references')），
+# 逐层往上找调用方，直到找到 kind='route' 或达到深度上限 18。
+# 返回每条路径的 route 节点 + chain_path + chain_ids。
 # ---------------------------------------------------------------------------
 
 Q5_REVERSE_CHAIN = """
@@ -102,13 +97,61 @@ WITH RECURSIVE chain AS (
          n1.qualified_name || ' -> ' || c.chain_path,
          n1.id || ',' || c.chain_ids
   FROM chain c
-  inner JOIN edges e ON e.target = c.id AND e.kind IN ('calls', 'references')
-  inner JOIN nodes n1 ON e.source = n1.id
-  WHERE c.depth < 10
+  INNER JOIN edges e ON e.target = c.id AND e.kind IN ('calls', 'references')
+  INNER JOIN nodes n1 ON e.source = n1.id
+  WHERE c.depth < 18
 )
 SELECT id, qualified_name, kind, file_path, start_line, end_line, depth, chain_path, chain_ids
 FROM chain
 WHERE kind = 'route'
 ORDER BY depth ASC
 LIMIT 3
+"""
+
+# ---------------------------------------------------------------------------
+# Q6 — 正向遍历：从所有 route 节点向下 18 层，找所有关联 nodeid
+# 递归 CTE：从 kind='route' 出发，沿 e.kind='calls' 向下走，
+# 收集所有可达的 node id。
+# ---------------------------------------------------------------------------
+
+Q6_ROUTE_REACHABLE_NODES = """
+WITH RECURSIVE reachable AS (
+  SELECT id, 0 AS depth
+  FROM nodes WHERE kind = 'route'
+  UNION
+  SELECT n2.id, r.depth + 1
+  FROM reachable r
+  INNER JOIN edges e ON e.source = r.id AND e.kind = 'calls'
+  INNER JOIN nodes n2 ON e.target = n2.id
+  WHERE r.depth < 18
+)
+SELECT DISTINCT id FROM reachable
+"""
+
+# ---------------------------------------------------------------------------
+# Q7 — route 可达方法与 Q1 入口方法取交集
+# 只审计 route 能到达的 public 带参方法（过滤掉不可达的，减少审计量）
+# ---------------------------------------------------------------------------
+
+Q7_ROUTE_REACHABLE_ENTRY_METHODS = """
+SELECT n.id, n.qualified_name, n.name, n.signature, n.file_path, n.start_line, n.end_line
+FROM nodes n
+WHERE n.kind = 'method'
+  AND n.language = 'java'
+  AND n.signature NOT GLOB '*()'
+  AND n.file_path LIKE :pkg_pattern
+  AND n.id IN (
+    WITH RECURSIVE reachable AS (
+      SELECT id, 0 AS depth
+      FROM nodes WHERE kind = 'route'
+      UNION
+      SELECT n2.id, r.depth + 1
+      FROM reachable r
+      INNER JOIN edges e ON e.source = r.id AND e.kind = 'calls'
+      INNER JOIN nodes n2 ON e.target = n2.id
+      WHERE r.depth < 18
+    )
+    SELECT DISTINCT id FROM reachable
+  )
+ORDER BY n.file_path, n.start_line
 """
