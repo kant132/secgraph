@@ -14,9 +14,12 @@
 """
 from __future__ import annotations
 
+import os
+# 本地回环地址不走代理（LLM API 走代理，但本地 Chrome CDP / WebGoat 不走）
+os.environ['NO_PROXY'] = '127.0.0.1,localhost'
+
 import json
 import logging
-import os
 import re
 
 from langchain_openai import ChatOpenAI

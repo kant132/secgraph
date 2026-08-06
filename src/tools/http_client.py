@@ -14,6 +14,10 @@
 """
 from __future__ import annotations
 
+import os
+# 本地回环地址不走代理
+os.environ['NO_PROXY'] = '127.0.0.1,localhost'
+
 import logging
 from urllib.parse import urljoin
 
