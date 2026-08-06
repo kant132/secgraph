@@ -272,7 +272,39 @@ class TestDiscoverWithMockCodegraph:
         for f in base_state["findings"]:
             assert "[路由可达性分析]" in f.evidence, "trace_route 应标记可达性"
 
-        # 4. record (真实 DB + .md)
+        # 4. verify (mock HttpClient + 真实 LLM)
+        mock_login_info = {
+            "target_url": "http://localhost:18080/test",
+            "login_url": "http://localhost:18080/test/login",
+            "login_method": "POST",
+            "login_body": "username=test&password=test",
+            "login_headers": {},
+            "status": "verified",
+        }
+        mock_http = MagicMock()
+        mock_http.login.return_value = True
+        mock_http.session = MagicMock()
+        mock_http.session.cookies = MagicMock()
+        mock_http.session.cookies.items.return_value = [("JSESSIONID", "mock-session-id")]
+        mock_http.send.return_value = (200, {"Content-Type": "application/json"}, '{"lessonCompleted": false, "output": "101,Joe,Snow,987654321,VISA"}')
+
+        with patch("src.nodes.verify.node.read_login_info", return_value=mock_login_info), \
+             patch("src.nodes.verify.node.HttpClient", return_value=mock_http), \
+             patch("src.nodes.verify.node.run_agent") as mock_run_agent:
+
+            mock_run_agent.return_value = (True, "PoC 验证成功，响应包含数据库数据", "POST /api/query HTTP/1.1\n\nuserid=' OR '1'='1", [{"iter": 1, "tool": "send_http", "result": "200 OK"}])
+
+            from src.nodes.verify.node import verify_finding
+            verify_result = verify_finding(base_state)
+            base_state.update(verify_result)
+
+        # 验证 finding 有 poc_result
+        for f in base_state["findings"]:
+            assert f.poc_result is not None, "verify 应设置 poc_result"
+            assert f.poc_result in ("confirmed", "denied", "inconclusive"), \
+                f"poc_result 应是 confirmed/denied/inconclusive，实际: {f.poc_result}"
+
+        # 5. record (真实 DB + .md)
         from src.nodes.record import record
         record_result = record(base_state)
 
@@ -280,3 +312,8 @@ class TestDiscoverWithMockCodegraph:
         findings_dir = Path(base_state["findings_dir"])
         md_files = list(findings_dir.glob("*.md"))
         assert len(md_files) >= 1, "record 应为每个 finding 写 .md"
+
+        # 验证 .md 包含 PoC 验证结果
+        for md_file in md_files:
+            content = md_file.read_text(encoding="utf-8")
+            assert "PoC Result" in content, ".md 应包含 PoC 验证结果"
