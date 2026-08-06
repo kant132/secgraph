@@ -9,14 +9,16 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urljoin
+from datetime import datetime
+from pathlib import Path
 
 from ...state import AuditState, Finding
 from ...tools.http_client import HttpClient
 from ._agent import run_agent
-from ._login import explore_login, http_login, read_env, read_login_info, write_login_info
+from ._login import explore_login, read_env, read_login_info, write_login_info
 from ._payload import ai_verify, send_payload
 
 log = logging.getLogger("secgraph.verify.node")
@@ -67,7 +69,7 @@ def verify_finding(state: AuditState) -> dict:
         return {"findings": findings}
 
     # 4. 第一轮：顺序发初始 payload + AI 验证（含 second_payload 循环）
-    explore_msgs: list[str] = list(state.get("explore_messages", []))
+    explore_msgs: list[str] = []
     agent_msgs_all: list[dict] = []
     need_agent: list[Finding] = []
 
@@ -77,9 +79,7 @@ def verify_finding(state: AuditState) -> dict:
             f.poc_output = "[no payload]"
             continue
 
-        print(f"\n{'#'*60}")
-        print(f"# 初始 PoC: {f.vuln_type} — {f.node_id[:30]}")
-        print(f"{'#'*60}")
+        log.info("verify: 初始 PoC — %s — %s", f.vuln_type, f.node_id[:30])
 
         verified = False
         reasoning = ""
@@ -87,9 +87,9 @@ def verify_finding(state: AuditState) -> dict:
 
         for round_num in range(MAX_PAYLOAD_ROUNDS):
             label = "初始" if round_num == 0 else f"second_payload({round_num})"
-            print(f"\n--- {label} ---")
+            log.info("verify: %s — round %d (%s)", f.node_id[:30], round_num, label)
 
-            parsed_result = _send_and_verify(f, target_url, tool)
+            parsed_result = send_payload(tool, target_url, f)
             if parsed_result is None:
                 break
             status, resp_headers, resp_body, method, url, body, headers, _ = parsed_result
@@ -99,18 +99,17 @@ def verify_finding(state: AuditState) -> dict:
                 status, resp_headers, resp_body,
             )
 
-            if second_payload:
-                print(f"\n--- AI 生成 second_payload，发送验证 ---")
+            # 已确认就不浪费 round 发 second_payload
+            if second_payload and not verified:
+                log.info("verify: AI 生成 second_payload，重试")
                 f.payload = second_payload
                 continue
             break
 
         # 所有 finding 都进 agent 循环（不只是失败的）
         # confirmed 的也进 agent 做深度验证（CIA 证明 + PoC 确认）
-        if verified:
-            log.info("verify: %s → 第一轮 confirmed，进入 agent 深度验证", f.node_id[:30])
-        else:
-            log.info("verify: %s → 第一轮未确认，进入 agent 深度验证", f.node_id[:30])
+        log.info("verify: %s → 第一轮 %s，进入 agent 深度验证",
+                 f.node_id[:30], "confirmed" if verified else "未确认")
         need_agent.append(f)
 
     # 5. 第二轮：并发 agent 循环
@@ -153,7 +152,7 @@ def verify_finding(state: AuditState) -> dict:
              confirmed, denied, len(findings) - confirmed - denied)
 
     # 写运行历史到文件（不进 state — state 是决策，不是日志）
-    _write_history(project_path, run_id := state.get("run_id", ""),
+    _write_history(project_path, state.get("run_id", ""),
                    explore_msgs, agent_msgs_all)
 
     return {"findings": findings}
@@ -163,10 +162,6 @@ def _write_history(project_path: str, run_id: str,
                    explore_msgs: list[str], agent_msgs: list[dict]) -> None:
     """把 explore_msgs + agent_msgs 追加到 {project_path}/verify_history.json。
     与 DB 分离 — DB 存 findings（决策），文件存历史（日志）。"""
-    import json
-    from datetime import datetime
-    from pathlib import Path
-
     if not explore_msgs and not agent_msgs:
         return
     f = Path(project_path) / "verify_history.json"
@@ -182,7 +177,7 @@ def _write_history(project_path: str, run_id: str,
             history = json.loads(f.read_text(encoding="utf-8"))
             if not isinstance(history, list):
                 history = [history]
-        except Exception:
+        except json.JSONDecodeError:
             history = []
     else:
         history = []
@@ -190,8 +185,3 @@ def _write_history(project_path: str, run_id: str,
     f.write_text(json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("verify: 历史已写入 → %s（%d explore, %d agent）",
              f, len(explore_msgs), len(agent_msgs))
-
-
-def _send_and_verify(f: Finding, target_url: str, tool: HttpClient) -> tuple | None:
-    """发 payload 并返回 (status, resp_headers, resp_body, method, url, body, headers, cookies)。"""
-    return send_payload(tool, target_url, f)

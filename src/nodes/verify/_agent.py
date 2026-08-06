@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -22,8 +23,9 @@ log = logging.getLogger("secgraph.verify.agent")
 
 _AGENT_PROMPT = Path(__file__).parent.parent.parent / "prompts" / "agent_system_prompt.md"
 _AGENT_PROMPT = _AGENT_PROMPT.resolve()
+_AGENT_PROMPT_TEXT = _AGENT_PROMPT.read_text(encoding="utf-8")
 
-MAX_AGENT_ITERS = 10
+AGENT_RECURSION_LIMIT = 50  # LangGraph agent 子图的最大步数（防止无限循环）
 
 
 def run_agent(finding: Finding, project_path: str, http_client: HttpClient,
@@ -34,19 +36,20 @@ def run_agent(finding: Finding, project_path: str, http_client: HttpClient,
     """
     from langgraph.prebuilt import create_react_agent
     from langchain_core.messages import HumanMessage
-    from ...llm import _get_raw_llm
+    from ...llm import _get_verify_llm_raw
 
     # 1. 创建工具（绑定到当前项目 + session）
     tools = create_agent_tools(project_path, http_client)
     log.info("agent: 创建 %d 个工具", len(tools))
 
     # 2. 创建 LangGraph ReAct agent
-    llm = _get_raw_llm()
+    llm = _get_verify_llm_raw()
     agent_graph = create_react_agent(llm, tools, version="v2")
-    log.info("agent: LangGraph create_react_agent 创建完成（version=v2, recursion_limit=25）")
+    log.info("agent: LangGraph create_react_agent 创建完成（version=v2, recursion_limit=%d）",
+             AGENT_RECURSION_LIMIT)
 
-    # 3. 系统提示
-    system_prompt = _AGENT_PROMPT.read_text(encoding="utf-8")
+    # 3. 系统提示（启动时已读取到 _AGENT_PROMPT_TEXT，O(1) 访问）
+    system_prompt = _AGENT_PROMPT_TEXT
 
     # 4. 用户消息
     user_msg = (
@@ -76,7 +79,7 @@ def run_agent(finding: Finding, project_path: str, http_client: HttpClient,
                     {"role": "user", "content": user_msg},
                 ]
             },
-            {"recursion_limit": 50},
+            {"recursion_limit": AGENT_RECURSION_LIMIT},
         )
     except Exception as e:
         log.warning("agent: 子图执行失败 → %s", e)
@@ -160,7 +163,6 @@ def _ai_judge_from_last_response(finding: Finding, messages: list,
 
     # 解析 send_http 工具返回的响应文本
     # 格式: 'HTTP {status}\nHeaders: {json}\nBody: {body}'
-    import json
     lines = last_http_response.split("\n", 2)
     status = 0
     resp_headers = {}

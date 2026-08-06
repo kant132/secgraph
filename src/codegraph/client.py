@@ -1,6 +1,6 @@
 """codegraph 客户端 — 通过 sqlite3 查询 codegraph.db，返回类型化数据。
 
-每条方法对应 Q1-Q4 查询，返回 state.py 中的 dataclass。
+每条方法对应 Q1/Q3-Q5 查询，返回 state.py 中的 dataclass。
 用可写连接（非 mode=ro）确保 SQLite 能读 WAL 数据 — 只读模式会跳过 WAL 返回 0 行。
 所有查询以 node_id 为键（不再用 file_path）。
 """
@@ -10,9 +10,9 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from ..state import CallEdge, FieldNode, MethodNode
+from ..state import FieldNode, MethodNode
 from .queries import (
-    Q1_ENTRY_METHODS, Q2_CALL_EDGES, Q3_FIELDS_BY_NODE, Q4_CALLEE_META, Q5_REVERSE_CHAIN,
+    Q1_ENTRY_METHODS, Q3_FIELDS_BY_NODE, Q4_CALLEE_META, Q5_REVERSE_CHAIN,
     ROUTE_REACHABLE_INIT, IS_ROUTE_REACHABLE,
 )
 
@@ -26,6 +26,8 @@ class CodegraphClient:
         self.db_path = db_path
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
+        # 进程级缓存：{(sources_root, file_path): list[str]}，避免同一文件多次 read_text+splitlines
+        self._file_lines: dict[tuple[str, str], list[str]] = {}
         # 建临时表（调用一次，后续全部 JOIN）
         self._conn.executescript(ROUTE_REACHABLE_INIT)
         self._conn.commit()
@@ -61,25 +63,6 @@ class CodegraphClient:
             methods = methods[:limit]
         return methods
 
-    # ---- Q2: 调用边（按 nodeid，多行） -----------------------------------
-
-    def list_call_edges(self, node_id: str) -> list[CallEdge]:
-        """Q2 — 入口方法的调用边（e.source = :node_id）。多行返回，需聚合。"""
-        rows = self._conn.execute(Q2_CALL_EDGES, {"node_id": node_id}).fetchall()
-        return [
-            CallEdge(
-                caller_qualified="",
-                caller_name="",
-                caller_line=0,
-                callee_qualified=r["callee_qualified"],
-                callee_name=r["callee_name"],
-                callee_file=r["callee_file"],
-                callee_line=r["callee_line"],
-                edge_kind=r["edge_kind"],
-            )
-            for r in rows
-        ]
-
     # ---- Q3: 成员字段（按 nodeid 查同文件） ------------------------------
 
     def list_fields_by_nodeid(self, node_id: str) -> list[FieldNode]:
@@ -98,20 +81,25 @@ class CodegraphClient:
 
     # ---- Q4 + 方法体读取 -----------------------------------------------
 
-    def list_sink_candidates(self, node_id: str) -> list[str]:
-        """Q4 — 入口方法的 distinct callee qualified_name（仅 kind=calls）。"""
-        rows = self._conn.execute(Q4_CALLEE_META, {"node_id": node_id}).fetchall()
-        return [r["callee_qualified"] for r in rows]
+    def _read_lines(self, sources_root: str, file_path: str) -> list[str] | None:
+        """读源码行列表（进程内缓存）。文件不存在返回 None。"""
+        key = (sources_root, file_path)
+        if key not in self._file_lines:
+            full = Path(sources_root) / file_path
+            if not full.exists():
+                self._file_lines[key] = []
+                return None
+            self._file_lines[key] = full.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = self._file_lines[key]
+        return lines if lines else None
 
-    @staticmethod
-    def _read_method_body(sources_root: str, file_path: str,
+    def _read_method_body(self, sources_root: str, file_path: str,
                           start_line: int, end_line: int, qualified_name: str) -> str:
         """读源码 [start_line, end_line]，首行加 // qualified_name 注释。不加行号。"""
-        full = Path(sources_root) / file_path
-        if not full.exists():
-            return f"// {qualified_name}\n[source not found: {full}]"
-        lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
-        snippet = lines[start_line - 1:end_line]  # 0-indexed 切片
+        lines = self._read_lines(sources_root, file_path)
+        if lines is None:
+            return f"// {qualified_name}\n[source not found: {Path(sources_root) / file_path}]"
+        snippet = lines[start_line - 1:end_line]
         body = "".join(f"{line}\n" for line in snippet)
         return f"// {qualified_name}\n{body}"
 
@@ -121,7 +109,7 @@ class CodegraphClient:
             sources_root, method.file_path, method.start_line, method.end_line, method.qualified_name)
 
     def get_callee_bodies(self, sources_root: str, node_id: str) -> dict[str, str]:
-        """Q4 — 入口方法的被调方法体 {callee_nodeid: '// fqn\\nbody'}。
+        """Q4 — 入口方法的被调方法体 {callee_nodeid: '// fqn\nbody'}。
         仅 kind=calls 的边，distinct 去重。"""
         rows = self._conn.execute(Q4_CALLEE_META, {"node_id": node_id}).fetchall()
         return {
@@ -130,15 +118,6 @@ class CodegraphClient:
                 r["callee_start_line"], r["callee_end_line"], r["callee_qualified"])
             for r in rows
         }
-
-    @staticmethod
-    def read_source(sources_root: str, file_path: str) -> str:
-        """读完整 .java 源码（带行号），保留兼容。"""
-        full = Path(sources_root) / file_path
-        if not full.exists():
-            return f"[source not found: {full}]"
-        text = full.read_text(encoding="utf-8", errors="replace")
-        return "".join(f"{i + 1}: {line}\n" for i, line in enumerate(text.splitlines()))
 
     # ---- Q5: 反向调用链追溯 ---------------------------------------------
 
@@ -149,34 +128,21 @@ class CodegraphClient:
         return [dict(r) for r in rows]
 
     def get_chain_bodies(self, sources_root: str, chain_ids: str) -> dict[str, str]:
-        """按逗号分隔的 nodeid 列表，逐个取方法体，返回 {nodeid: body}。
+        """按逗号分隔的 nodeid 列表，单条 SQL IN (...) 取所有方法体。
         用于构建调用链方法体，发给 AI 做可达性分析。"""
-        result: dict[str, str] = {}
-        for nid in chain_ids.split(","):
-            nid = nid.strip()
-            if not nid:
-                continue
-            row = self._conn.execute(
-                "SELECT qualified_name, file_path, start_line, end_line FROM nodes WHERE id = ?",
-                (nid,),
-            ).fetchone()
-            if row:
-                result[nid] = self._read_method_body(
-                    sources_root, row["file_path"],
-                    row["start_line"], row["end_line"], row["qualified_name"])
-        return result
-
-    def get_node_body(self, sources_root: str, node_id: str) -> str:
-        """按 nodeid 取单个节点的源码体。"""
-        row = self._conn.execute(
-            "SELECT qualified_name, file_path, start_line, end_line FROM nodes WHERE id = ?",
-            (node_id,),
-        ).fetchone()
-        if row:
-            return self._read_method_body(
-                sources_root, row["file_path"],
-                row["start_line"], row["end_line"], row["qualified_name"])
-        return f"[node not found: {node_id}]"
+        nids = [nid.strip() for nid in chain_ids.split(",") if nid.strip()]
+        if not nids:
+            return {}
+        placeholders = ",".join("?" for _ in nids)
+        rows = self._conn.execute(
+            f"SELECT id, qualified_name, file_path, start_line, end_line FROM nodes WHERE id IN ({placeholders})",
+            nids,
+        ).fetchall()
+        return {
+            r["id"]: self._read_method_body(
+                sources_root, r["file_path"], r["start_line"], r["end_line"], r["qualified_name"])
+            for r in rows
+        }
 
     # ---- 审计记忆（直接存 codegraph.db，和代码索引同库）-------------------
 
@@ -206,28 +172,25 @@ class CodegraphClient:
                     security_risk: str, confidence: float, status: str = "pending",
                     input_validation: str = "", output_limitation: str = "",
                     called_methods: str = "") -> None:
-        """保存/更新审计记忆。按 node_id upsert。"""
-        existing = self._conn.execute(
-            "SELECT id FROM audit_memory WHERE node_id = ?", (node_id,)
-        ).fetchone()
-        if existing:
-            self._conn.execute("""
-                UPDATE audit_memory SET
-                    signature = ?, input_validation = ?, output_limitation = ?,
-                    called_methods = ?, security_risk = ?, vuln_type = ?,
-                    confidence = ?, status = ?, updated_at = datetime('now')
-                WHERE node_id = ?
-            """, (signature, input_validation, output_limitation,
-                  called_methods, security_risk, vuln_type,
-                  confidence, status, node_id))
-        else:
-            self._conn.execute("""
-                INSERT INTO audit_memory
-                    (node_id, signature, input_validation, output_limitation,
-                     called_methods, security_risk, vuln_type, confidence, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (node_id, signature, input_validation, output_limitation,
-                  called_methods, security_risk, vuln_type, confidence, status))
+        """保存/更新审计记忆。按 node_id UPSERT（SQLite 3.24+）。"""
+        self._conn.execute("""
+            INSERT INTO audit_memory
+                (node_id, signature, input_validation, output_limitation,
+                 called_methods, security_risk, vuln_type, confidence, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(node_id) DO UPDATE SET
+                signature = excluded.signature,
+                input_validation = excluded.input_validation,
+                output_limitation = excluded.output_limitation,
+                called_methods = excluded.called_methods,
+                security_risk = excluded.security_risk,
+                vuln_type = excluded.vuln_type,
+                confidence = excluded.confidence,
+                status = excluded.status,
+                updated_at = datetime('now')
+        """, (node_id, signature, input_validation, output_limitation,
+              called_methods, security_risk, vuln_type,
+              confidence, status))
         self._conn.commit()
 
     def lookup_memory(self, node_id: str, min_confidence: float = 0.9) -> dict | None:

@@ -1,6 +1,6 @@
 """audit_file node — renders the prompt template + calls structured LLM.
 
-Uses langchain with_structured_output(Dict[str, VulnDetail]) — no manual
+Uses langchain with_structured_output(dict[str, VulnDetail]) — no manual
 JSON parsing. LangChain auto-retries on schema violations.
 
 Consumes one FileAuditTask from work_list[audit_index]. Produces Finding[]
@@ -17,8 +17,8 @@ from ..state import AuditState, Finding
 
 log = logging.getLogger("secgraph.audit")
 
-_TEMPLATE = Path(__file__).with_name("..") / "prompts" / "audit_template.md"
-_TEMPLATE = _TEMPLATE.resolve()
+_TEMPLATE_PATH = (Path(__file__).with_name("..") / "prompts" / "audit_template.md").resolve()
+_TEMPLATE_TEXT = _TEMPLATE_PATH.read_text(encoding="utf-8")
 
 
 def _render_template(task) -> str:
@@ -32,11 +32,10 @@ def _render_template(task) -> str:
     methods_json = json.dumps(task.method_bodies, indent=2, ensure_ascii=False) if task.method_bodies else "{}"
     calls_json = json.dumps(task.calls, indent=2, ensure_ascii=False) if task.calls else "{}"
 
-    tmpl = _TEMPLATE.read_text(encoding="utf-8")
-    out = tmpl.replace("{fields}", fields_text)
-    out = out.replace("{methods}", methods_json)
-    out = out.replace("{calls}", calls_json)
-    return out
+    return (_TEMPLATE_TEXT
+        .replace("{fields}", fields_text)
+        .replace("{methods}", methods_json)
+        .replace("{calls}", calls_json))
 
 
 def audit_file(state: AuditState) -> dict:
@@ -44,33 +43,15 @@ def audit_file(state: AuditState) -> dict:
     work_list: list = state.get("work_list", [])
     idx: int = state.get("audit_index", 0)
     if idx >= len(work_list):
-        return {}  # loop done; router will send to reflect
+        return {}  # loop done; router sends to record
 
     task = work_list[idx]
     log.info("audit: [%d/%d] %s", idx + 1, len(work_list), task.file_path)
 
     prompt = _render_template(task)
-    log.info("audit: ===== prompt 发送给 LLM =====")
-    print(prompt)
-    log.info("audit: ===== prompt 结束 =====")
-    result = call_audit_llm(prompt)  # AuditResult (RootModel[Dict[str, VulnDetail]])
-    log.info("audit: ===== LLM 返回结构化结果 =====")
-    for nid, detail in (result.root or {}).items():
-        print(f"  [{nid}]")
-        print(f"    vuln_type:  {detail.vuln_type}")
-        print(f"    severity:   {detail.severity}")
-        print(f"    confidence: {detail.confidence}")
-        print(f"    payload:    {detail.payload}")
-        print(f"    evidence:   {detail.evidence}")
-        if detail.input_validation:
-            print(f"    input_validation: {detail.input_validation}")
-        if detail.output_limitation:
-            print(f"    output_limitation: {detail.output_limitation}")
-        if detail.called_methods:
-            print(f"    called_methods: {detail.called_methods}")
-        if detail.security_risk:
-            print(f"    security_risk: {detail.security_risk}")
-    log.info("audit: ===== LLM 返回结束 =====")
+    log.debug("audit: prompt=\n%s", prompt)
+    result = call_audit_llm(prompt)  # AuditResult (RootModel[dict[str, VulnDetail]])
+    log.debug("audit: llm result=%s", result.root)
 
     # 保存审计记忆到 codegraph.db（和代码索引同库）
     codegraph_db_path = state.get("codegraph_db", "")
@@ -79,10 +60,9 @@ def audit_file(state: AuditState) -> dict:
         with CodegraphClient(codegraph_db_path) as cg:
             cg.init_memory_table()
             for nid, detail in (result.root or {}).items():
-                signature = f"{nid}:{detail.vuln_type}"
                 cg.save_memory(
                     node_id=nid,
-                    signature=signature,
+                    signature=f"{nid}:{detail.vuln_type}",
                     vuln_type=detail.vuln_type,
                     security_risk=detail.security_risk or detail.evidence[:200],
                     confidence=detail.confidence,
@@ -93,9 +73,8 @@ def audit_file(state: AuditState) -> dict:
                 )
         log.info("audit: 审计记忆已保存到 codegraph.db → %d 条", len(result.root or {}))
 
-    new_findings: list[Finding] = []
-    for node_id, detail in result.root.items():
-        new_findings.append(Finding(
+    new_findings: list[Finding] = [
+        Finding(
             file_path=task.file_path,
             node_id=node_id,
             vuln_type=detail.vuln_type,
@@ -103,8 +82,10 @@ def audit_file(state: AuditState) -> dict:
             evidence=detail.evidence,
             payload=detail.payload,
             confidence=detail.confidence,
-        ))
+        )
+        for node_id, detail in result.root.items()
+    ]
 
     log.info("audit: %s -> %d findings", task.file_path, len(new_findings))
-    findings = list(state.get("findings", [])) + new_findings
+    findings = state.get("findings", []) + new_findings
     return {"findings": findings, "audit_index": idx + 1}

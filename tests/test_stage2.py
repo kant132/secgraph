@@ -23,11 +23,13 @@ WEBGOAT_SRC = r"D:\jar\webgoat"
 @pytest.fixture
 def state():
     tmpdir = tempfile.mkdtemp()
+    # 限制为 2 个 findings 以保证 5 min 内完成（5 个会让 audit + verify 累积超出预算）
+    nids = VULN_NODEIDS[:2]
     return {
         "mode": "dev", "codegraph_db": WEBGOAT_DB, "sources_root": WEBGOAT_SRC,
         "pkg_prefix": "org/owasp/webgoat/lessons",
         "findings_dir": f"{tmpdir}/findings", "logs_dir": f"{tmpdir}/logs",
-        "file_limit": len(VULN_NODEIDS), "run_id": "stage2", "max_iterations": 3,
+        "file_limit": len(nids), "run_id": "stage2", "max_iterations": 3,
         "llm_model": "test", "work_list": [], "audit_index": 0,
         "findings": [], "verified": [], "reflection_notes": [], "iteration": 0,
         "agent_history": [], "next_agent": "",
@@ -35,13 +37,14 @@ def state():
 
 
 def build_tasks():
-    """从真实 codegraph.db 构建 5 个 task。"""
+    """从真实 codegraph.db 构建 task — 取前 2 个 findings 以保证 5 min 内完成。"""
     from src.codegraph import CodegraphClient
     from src.state import MethodNode, FieldNode, FileAuditTask
 
+    nids = VULN_NODEIDS[:2]
     cg = CodegraphClient(WEBGOAT_DB)
     tasks = []
-    for nid in VULN_NODEIDS:
+    for nid in nids:
         row = cg._conn.execute(
             "SELECT id, qualified_name, name, signature, file_path, start_line, end_line FROM nodes WHERE id=?", (nid,)
         ).fetchone()

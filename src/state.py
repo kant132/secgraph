@@ -1,19 +1,18 @@
 """LangGraph state schema + per-node data contracts.
 
-Maps the 4 codegraph SQL queries (Q1-Q4) into typed structures that flow
-through the pipeline: discover -> file_loop -> audit -> verify -> record
-                                                        -> reflect (loop back)
+Maps the codegraph SQL queries (Q1-Q4) into typed structures that flow through
+the pipeline: discover -> file_loop -> audit -> verify -> record
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Literal, Required, TypedDict
+from typing import Literal, Required, TypedDict
 
 from pydantic import BaseModel, Field, RootModel
 
 
 # ---------------------------------------------------------------------------
-# codegraph query result rows  (one row = one record from nodes/edges tables)
+# codegraph query result rows  (one row = one record from nodes table)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -36,19 +35,6 @@ class FieldNode:
     name: str
     start_line: int
     end_line: int
-
-
-@dataclass
-class CallEdge:
-    """Q2 row — one caller->callee edge. Multi-row per file: aggregate, don't take one."""
-    caller_qualified: str
-    caller_name: str
-    caller_line: int
-    callee_qualified: str
-    callee_name: str
-    callee_file: str
-    callee_line: int
-    edge_kind: str
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +61,7 @@ class Finding:
     evidence: str                      # line refs + taint/logic + sanitization + reachability
     payload: str                       # PoC payload from static analysis, "" if none
     confidence: float                  # 0.0-1.0
+    reachability: str | None = None    # None=pending, "reachable" | "unreachable" | "uncertain"（trace 阶段填）
     status: str = "pending"            # pending / verified / false_positive
     poc: str | None = None             # executed PoC command (verify phase)
     poc_result: str | None = None      # confirmed / denied / inconclusive
@@ -98,9 +85,9 @@ class VulnDetail(BaseModel):
     security_risk: str = Field(default="", description="安全风险摘要")
 
 
-class AuditResult(RootModel[Dict[str, VulnDetail]]):
+class AuditResult(RootModel[dict[str, VulnDetail]]):
     """LLM 结构化输出整体：{nodeid: VulnDetail}。
-    用 RootModel 确保序列化成正确的 JSON Schema（Dict[str,X] 直接传会被当成普通 dict）。"""
+    用 RootModel 确保序列化成正确的 JSON Schema（dict[str,X] 直接传会被当成普通 dict）。"""
     pass
 
 
@@ -137,24 +124,10 @@ class PoCVerificationResult(BaseModel):
     second_payload: str = Field(default="", description="如果可以进一步利用造成更大影响，生成新的 payload；否则为空")
 
 
-class PayloadRetryResult(BaseModel):
-    """AI 根据源码重构 payload 的结果。"""
-    corrected_payload: str = Field(description="修正后的完整 HTTP 请求 payload")
-    reasoning: str = Field(description="原 payload 失败原因 + 新 payload 如何修正（列数、表名等）")
-
-
 class SupervisorDecision(BaseModel):
     """Supervisor 路由决策 — 根据当前 state 决定下一步派给哪个子agent。"""
     next_agent: str = Field(description="下一步派给哪个子agent: discovery | trace | verify | FINISH")
     reasoning: str = Field(description="为什么派给这个 agent（当前状态分析）")
-
-
-class AuditMemoryResult(BaseModel):
-    """审计记忆结构 — AI 审计输出中提取的记忆字段。"""
-    input_validation: str = Field(default="", description="输入校验：参数注解(@NotNull/@Pattern/@Size)、类型约束、手动校验逻辑")
-    output_limitation: str = Field(default="", description="输出限制：返回值编码/过滤/转义/长度限制")
-    called_methods: str = Field(description="调用的方法（callee qualified_names 逗号分隔）")
-    security_risk: str = Field(description="存在的安全风险（vuln_type + evidence 摘要）")
 
 
 # ---------------------------------------------------------------------------
@@ -171,18 +144,19 @@ class AuditState(TypedDict, total=False):
     logs_dir: Required[str]
     file_limit: Required[int | None]   # dev=10, runtime=None
     run_id: Required[str]
-    max_iterations: Required[int]       # self-reflection loop cap
     llm_model: Required[str]
 
-    # accumulated (optional — nodes return partial updates; no reducers,
-    # each node reads state.get(...) and returns the full merged list)
+    # accumulated（nodes 返回 partial update；无 reducer，每次返回完整 list）
     work_list: list[FileAuditTask]
     audit_index: int                   # pointer into work_list for the file loop
     findings: list[Finding]             # all suspected findings -> DB
     verified: list[Finding]            # verified vulns -> .md
-    reflection_notes: list[str]
-    iteration: int
-    explore_messages: list[str]       # codegraph 探索消息（已移除，写文件）
+    reflection_notes: list[str]       # 字段保留但不连 graph（reflect 已摘除）
+
     # Supervisor 模式专用
     agent_history: list[dict]         # supervisor + 子agent 对话历史
     next_agent: str                   # supervisor 分配的下一个子agent
+
+
+# 路由可达性分析在 evidence 中追加的标记（路由层用 str.contains 判断）
+EVIDENCE_TRACE_TAG = "[路由可达性分析]"

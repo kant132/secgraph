@@ -14,8 +14,10 @@ from ...tools.http_client import SKIP_HEADERS
 
 log = logging.getLogger("secgraph.verify.payload")
 
-_VERIFY_TEMPLATE = Path(__file__).parent.parent.parent / "prompts" / "poc_verification_template.md"
-_VERIFY_TEMPLATE = _VERIFY_TEMPLATE.resolve()
+_VERIFY_TEMPLATE_PATH = (Path(__file__).parent.parent.parent / "prompts" / "poc_verification_template.md").resolve()
+_VERIFY_TEMPLATE_TEXT = _VERIFY_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+_CURL_URL_RE = re.compile(r"https?://\S+")
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +37,7 @@ def parse_payload(payload: str) -> dict:
     body = None
     headers = {}
     if payload.startswith("curl"):
-        url_match = re.search(r"https?://\S+", payload)
+        url_match = _CURL_URL_RE.search(payload)
         if url_match:
             parsed = urlparse(url_match.group())
             path = parsed.path
@@ -115,8 +117,7 @@ def send_payload(http_client, target_url: str, finding: Finding) -> tuple | None
     # 通用 URL 去重：如果 payload path 已含 target_url 的 context path，不重复拼接
     # 例如 target_url=http://localhost/WebGoat, path=/WebGoat/attack → 不变成 /WebGoat/WebGoat/attack
     raw_path = parsed["path"].lstrip("/")
-    from urllib.parse import urlparse as _urlparse
-    target_parsed = _urlparse(target_url)
+    target_parsed = urlparse(target_url)
     target_path = target_parsed.path.strip("/")
     if target_path and raw_path.startswith(target_path + "/"):
         raw_path = raw_path[len(target_path) + 1:]
@@ -182,7 +183,7 @@ def ai_verify(finding: Finding, req_method: str, req_url: str,
     req_detail = format_request_detail(req_method, req_url, req_headers, req_body)
     resp_detail = format_response_detail(status, resp_headers, resp_body)
 
-    tmpl = _VERIFY_TEMPLATE.read_text(encoding="utf-8")
+    tmpl = _VERIFY_TEMPLATE_TEXT
     prompt = (
         tmpl
         .replace("{vuln_type}", finding.vuln_type)
