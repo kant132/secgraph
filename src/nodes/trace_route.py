@@ -43,12 +43,14 @@ def _prepare(f: Finding, cg: CodegraphClient, sources_root: str):
     if not cg.is_route_reachable(f.node_id):
         log.info("trace_route: %s — 不在 route 可达集中，跳过", f.node_id[:30])
         f.confidence = f.confidence * 0.3
+        f.reachability = "unreachable"
         f.evidence += f"\n\n{EVIDENCE_TRACE_TAG} 不可达（不在 route 可达集中）"
         return None
 
     chains = cg.get_call_chain_to_route(f.node_id)
     if not chains:
         log.info("trace_route: %s — Q5 未找到 route，Q6 确认可达", f.node_id[:30])
+        f.reachability = "reachable"
         f.evidence += f"\n\n{EVIDENCE_TRACE_TAG} 可达（调用链超过 18 层）"
         f.confidence = max(f.confidence, 0.6)
         return None
@@ -75,10 +77,12 @@ def _apply(f, result, chain_path: str) -> None:
             log.info("trace_route: payload 不是 HTTP 格式，已包裹为 POST %s", route_path)
         f.payload = payload
         f.confidence = result.confidence
+        f.reachability = "reachable"
         f.evidence += f"\n\n{EVIDENCE_TRACE_TAG} 可达。条件: {result.conditions}"
         log.info("trace_route: %s — 可达，payload 已更新", f.node_id[:30])
     else:
         f.confidence = result.confidence * 0.3
+        f.reachability = "unreachable"
         f.evidence += f"\n\n{EVIDENCE_TRACE_TAG} 不可达。原因: {result.conditions}"
         log.info("trace_route: %s — 不可达，置信度降至 %.2f", f.node_id[:30], f.confidence)
 
@@ -120,6 +124,7 @@ def trace_route(state: AuditState) -> dict:
                 except Exception as e:
                     # LLM 失败：写 fallback tag，避免后续 _after_discovery 反复 re-trace 这个 finding
                     log.warning("trace_route: %s LLM 失败 → %s", f.node_id[:30], e)
+                    f.reachability = "uncertain"
                     f.evidence += f"\n\n{EVIDENCE_TRACE_TAG} 不可达（LLM 分析失败: {str(e)[:80]}）"
                     f.confidence *= 0.3
 

@@ -59,6 +59,7 @@ def audit_file(state: AuditState) -> dict:
                     node_id=nid,
                     signature=f"{nid}:{detail.vuln_type}",
                     vuln_type=detail.vuln_type,
+                    severity=detail.severity,
                     security_risk=detail.security_risk or detail.evidence[:200],
                     confidence=detail.confidence,
                     status="pending",

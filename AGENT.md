@@ -48,3 +48,13 @@
     - 禁止在 unit/integration 测试里发真实 LLM 请求（必须 mock）
     - e2e 只选 1 个明确有漏洞的 nodeid（SQLi 最可靠），不跑多个漏洞
     - 删除冗余 stage 测试（原 stage2/stage3 已删，逻辑合并到 e2e + integration）
+12、上下文管理规则：
+    - 路由判断用结构化字段（Finding.reachability），不用 evidence 子串匹配
+      reachability: None=未分析 / "reachable" / "unreachable" / "uncertain"
+      EVIDENCE_TRACE_TAG 仍写 evidence（人类可读），但路由不靠它
+    - audit_memory 必须存 severity 列，memory 命中时恢复真实 severity（不用 "unknown" 占位）
+    - 不设 supervisor 节点 — START 直接 → discovery，规则路由在 _after_* 函数里
+    - agent wrapper（discovery/trace/verify）不修改输入 state（禁止 state.update()）
+      用 local_state = {**state, ...} 传给子调用，只 return partial update dict
+    - Finding 是跨节点传递的核心数据对象，每个阶段追加自己的字段：
+      audit → trace → verify → record，各管各的字段，不覆盖别人的

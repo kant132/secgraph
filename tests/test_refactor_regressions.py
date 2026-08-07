@@ -49,7 +49,9 @@ def _state(codegraph_db: str, findings_dir: str, findings, **extra) -> dict:
 
 
 def _fake_codegraph_db(db_path: str) -> None:
-    """给空 SQLite DB 补上 codegraph 必需的 nodes/edges 表，让 CodegraphClient 不崩。"""
+    """给空 SQLite DB 补上 codegraph 必需的 nodes/edges 表。
+    audit_memory 表由 ORM init_business_tables 自动建（含 severity 列），不在这里手动建。
+    """
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript("""
@@ -62,20 +64,6 @@ def _fake_codegraph_db(db_path: str) -> None:
             file_path TEXT,
             start_line INT,
             end_line INT
-        );
-        CREATE TABLE IF NOT EXISTS audit_memory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id TEXT NOT NULL UNIQUE,
-            signature TEXT NOT NULL,
-            input_validation TEXT DEFAULT '',
-            output_limitation TEXT DEFAULT '',
-            called_methods TEXT DEFAULT '',
-            security_risk TEXT NOT NULL,
-            vuln_type TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS edges (
             source TEXT,
@@ -328,10 +316,10 @@ class TestPromptsRender:
 
 
 class TestDiscoveryMemorySeverity:
-    """discovery.py 从 memory 还原 finding 时 severity 必须是合法枚举，不是 status。"""
+    """discovery.py 从 memory 还原 finding 时 severity 必须从 audit_memory 恢复，不是用占位符。"""
 
-    def test_memory_cached_finding_severity_is_unknown_placeholder(self, tmp_path):
-        """直接验证 discovery_agent 的 memory-hit 路径：构造 task 命中 memory，断言 severity=unknown。"""
+    def test_memory_cached_finding_recovers_severity(self, tmp_path):
+        """直接验证 discovery_agent 的 memory-hit 路径：存 severity=high → 命中后恢复 high。"""
         from src.codegraph import CodegraphClient
         from src.nodes.agents.discovery import discovery_agent
         from src.state import FileAuditTask, FieldNode
@@ -339,13 +327,14 @@ class TestDiscoveryMemorySeverity:
         db_path = str(tmp_path / "codegraph.db")
         _fake_codegraph_db(db_path)
 
-        # 先写入一条 memory 记录
+        # 先写入一条 memory 记录（带 severity=high）
         with CodegraphClient(db_path) as cg:
             cg.init_memory_table()
             cg.save_memory(
                 node_id="method:cached1",
                 signature="sig",
                 vuln_type="SQLi",
+                severity="high",
                 security_risk="test risk",
                 confidence=0.95,
                 status="pending",
@@ -371,9 +360,8 @@ class TestDiscoveryMemorySeverity:
         }
         result = discovery_agent(state)
 
-        # 命中 memory 后应该有 cached finding
         cached = next((f for f in result["findings"] if f.node_id == "method:cached1"), None)
         assert cached is not None, f"expected memory-hit finding, got findings={[f.node_id for f in result['findings']]}"
-        # severity 必须是合法枚举（critical/high/medium/low/unknown）而不是 status（pending/verified/false_positive）
-        assert cached.severity in ("critical", "high", "medium", "low", "unknown")
+        # severity 必须从 audit_memory 恢复为 "high"，不是 "unknown" 占位
+        assert cached.severity == "high", f"expected severity=high from memory, got {cached.severity}"
         assert cached.severity not in ("pending", "verified", "false_positive")

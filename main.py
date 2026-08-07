@@ -81,7 +81,6 @@ def main() -> None:
         "verified": [],
         "reflection_notes": [],
         "agent_history": [],
-        "next_agent": "",
     }
 
     app = build_graph()

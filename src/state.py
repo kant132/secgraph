@@ -124,12 +124,6 @@ class PoCVerificationResult(BaseModel):
     second_payload: str = Field(default="", description="如果可以进一步利用造成更大影响，生成新的 payload；否则为空")
 
 
-class SupervisorDecision(BaseModel):
-    """Supervisor 路由决策 — 根据当前 state 决定下一步派给哪个子agent。"""
-    next_agent: str = Field(description="下一步派给哪个子agent: discovery | trace | verify | FINISH")
-    reasoning: str = Field(description="为什么派给这个 agent（当前状态分析）")
-
-
 # ---------------------------------------------------------------------------
 # LangGraph state  (TypedDict — passed between nodes, merged by the graph)
 # ---------------------------------------------------------------------------
@@ -152,11 +146,8 @@ class AuditState(TypedDict, total=False):
     findings: list[Finding]             # all suspected findings -> DB
     verified: list[Finding]            # verified vulns -> .md
     reflection_notes: list[str]       # 字段保留但不连 graph（reflect 已摘除）
-
-    # Supervisor 模式专用
-    agent_history: list[dict]         # supervisor + 子agent 对话历史
-    next_agent: str                   # supervisor 分配的下一个子agent
+    agent_history: list[dict]         # 各节点的执行历史（日志用）
 
 
-# 路由可达性分析在 evidence 中追加的标记（路由层用 str.contains 判断）
+# 路由可达性分析在 evidence 中追加的标记（人类可读，路由不再靠它判断——改用 Finding.reachability）
 EVIDENCE_TRACE_TAG = "[路由可达性分析]"

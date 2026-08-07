@@ -245,6 +245,7 @@ class AuditMemory(Base):
     called_methods: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="", comment="被调方法列表（逗号分隔）")
     security_risk: Mapped[str] = mapped_column(Text, nullable=False, comment="安全风险摘要（lookup_memory 时作为 evidence 返回）")
     vuln_type: Mapped[str] = mapped_column(String, nullable=False, comment="漏洞类型（同 findings.vuln_type 枚举）")
+    severity: Mapped[str] = mapped_column(String, nullable=False, default="unknown", server_default="unknown", comment="严重等级：critical|high|medium|low|unknown（memory 命中时恢复）")
     confidence: Mapped[float] = mapped_column(nullable=False, comment="置信度 0.0-1.0（>=0.9 才缓存命中）")
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending", server_default="pending", comment="生命周期：pending|verified|false_positive")
     created_at: Mapped[Optional[str]] = mapped_column(Text, server_default=text("datetime('now')"), comment="首次 INSERT 时间")

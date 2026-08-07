@@ -18,20 +18,20 @@ class TestGraphStructure:
         app = build_graph()
         nodes = list(app.get_graph().nodes.keys())
         assert "__start__" in nodes
-        assert "supervisor" in nodes
         assert "discovery" in nodes
         assert "trace" in nodes
         assert "verify" in nodes
         assert "record" in nodes
         assert "__end__" in nodes
+        # supervisor 已删除 — START 直接 → discovery
+        assert "supervisor" not in nodes
 
     def test_edges(self):
         from src.graph import build_graph
         app = build_graph()
         edges = app.get_graph().edges
         edge_pairs = [(e.source, e.target) for e in edges]
-        assert ("__start__", "supervisor") in edge_pairs
-        assert ("supervisor", "discovery") in edge_pairs
+        assert ("__start__", "discovery") in edge_pairs
         assert ("record", "__end__") in edge_pairs
 
 
@@ -44,9 +44,9 @@ class TestStateSchema:
         assert "findings" in annotations
         assert "work_list" in annotations
         assert "audit_index" in annotations
-        assert "next_agent" in annotations
         assert "agent_history" in annotations
         assert "findings_db" not in annotations  # 已删 — 用 codegraph_db
+        assert "next_agent" not in annotations  # supervisor 已删
 
     def test_no_reflect_fields(self):
         from src.state import AuditState
@@ -84,9 +84,3 @@ class TestPydanticModels:
         fields = ReachabilityResult.model_fields
         assert "reachable" in fields
         assert "updated_payload" in fields
-
-    def test_supervisor_decision(self):
-        from src.state import SupervisorDecision
-        fields = SupervisorDecision.model_fields
-        assert "next_agent" in fields
-        assert "reasoning" in fields

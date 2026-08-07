@@ -24,7 +24,7 @@ from langchain_openai import ChatOpenAI
 
 from .state import (
     AuditResult, LoginExplorationResult, PoCVerificationResult,
-    ReachabilityResult, SupervisorDecision,
+    ReachabilityResult,
 )
 
 # 本地回环地址不走代理（LLM API 走代理，但本地 Chrome CDP / WebGoat 不走）
@@ -166,8 +166,3 @@ def call_exploration_llm(prompt: str) -> LoginExplorationResult:
 def call_verification_llm(prompt: str) -> PoCVerificationResult:
     """PoC 验证 — 用 VERIFY_LLM_* 配置。"""
     return _call_structured(prompt, PoCVerificationResult, "verify")
-
-
-def call_supervisor_llm(prompt: str) -> SupervisorDecision:
-    """Supervisor 路由 — 用 VERIFY_LLM_* 配置。"""
-    return _call_structured(prompt, SupervisorDecision, "supervisor")

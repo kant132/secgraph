@@ -176,7 +176,7 @@ class CodegraphClient:
     def save_memory(self, node_id: str, signature: str, vuln_type: str,
                     security_risk: str, confidence: float, status: str = "pending",
                     input_validation: str = "", output_limitation: str = "",
-                    called_methods: str = "") -> None:
+                    called_methods: str = "", severity: str = "unknown") -> None:
         """保存/更新审计记忆。按 node_id UPSERT。
 
         ORM 实现：用 SQLite 方言的 `insert().on_conflict_do_update()`
@@ -194,6 +194,7 @@ class CodegraphClient:
             called_methods=called_methods,
             security_risk=security_risk,
             vuln_type=vuln_type,
+            severity=severity,
             confidence=confidence,
             status=status,
         )
@@ -206,6 +207,7 @@ class CodegraphClient:
                 "called_methods": stmt.excluded.called_methods,
                 "security_risk": stmt.excluded.security_risk,
                 "vuln_type": stmt.excluded.vuln_type,
+                "severity": stmt.excluded.severity,
                 "confidence": stmt.excluded.confidence,
                 "status": stmt.excluded.status,
                 "updated_at": text("datetime('now')"),
@@ -245,6 +247,7 @@ class CodegraphClient:
                 "called_methods": row.called_methods,
                 "security_risk": row.security_risk,
                 "vuln_type": row.vuln_type,
+                "severity": row.severity,
                 "confidence": row.confidence,
                 "status": row.status,
                 "created_at": row.created_at,
