@@ -52,19 +52,43 @@ class FileAuditTask:
 
 
 @dataclass
+class ChainResult:
+    """一条调用链的独立审计结果。
+
+    一个 sink 方法可能被多条 route 链到达，每条链有独立的：
+    - 路由路径（不同的 HTTP endpoint）
+    - 参数名（不同的 @RequestParam）
+    - 消毒情况（一条链有消毒，另一条可能没有）
+    - payload（不同路由不同参数名 → 不同 payload）
+    """
+    chain_path: str                    # route → ... → sink 的路径描述
+    chain_ids: str                     # 逗号分隔的 node_id 列表
+    reachable: str = "pending"        # pending / reachable / unreachable / uncertain
+    payload: str = ""                  # 本链的 HTTP payload
+    conditions: str = ""              # 触发条件
+    confidence: float = 0.0           # 本链的置信度
+    poc_result: str | None = None      # confirmed / denied / inconclusive（verify 阶段填）
+    poc_output: str | None = None
+
+
+@dataclass
 class Finding:
-    """One suspected vulnerability. status: pending -> verified | false_positive."""
+    """One suspected vulnerability. status: pending -> verified | false_positive.
+
+    一个 sink 方法可能有多条到达链（finding.chains），每条链独立审计。
+    """
     file_path: str
     node_id: str                       # codegraph nodeid of the method/callee (the JSON key)
     vuln_type: str                     # SQLi / SSRF / deser / path-traversal / ... / unknown
     severity: str                      # critical / high / medium / low / unknown
-    evidence: str                      # line refs + taint/logic + sanitization + reachability
+    evidence: str                      # line refs + taint/logic + sanitization
     payload: str                       # PoC payload from static analysis, "" if none
     confidence: float                  # 0.0-1.0
-    reachability: str | None = None    # None=pending, "reachable" | "unreachable" | "uncertain"（trace 阶段填）
+    chains: list[ChainResult] = field(default_factory=list)  # 多条到达链的独立审计结果
+    reachability: str | None = None    # None=pending, "reachable" | "unreachable" | "uncertain"（汇总）
     status: str = "pending"            # pending / verified / false_positive
     poc: str | None = None             # executed PoC command (verify phase)
-    poc_result: str | None = None      # confirmed / denied / inconclusive
+    poc_result: str | None = None      # confirmed / denied / inconclusive（汇总）
     poc_output: str | None = None
 
 

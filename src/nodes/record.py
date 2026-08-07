@@ -130,37 +130,38 @@ def record(state: AuditState) -> dict:
                 status=f.status,
             )
             session.add(finding_row)
-            session.flush()  # flush 拿回自增 PK（finding_row.id）
+            session.flush()
             fid = finding_row.id
 
             # 3b. 每个 finding 都写 .md
             md_path = _write_finding_md(findings_dir, run_id, f)
 
-            # 3c. 根据验证结果写 verified_vuln / 更新 status
+            # 3c. 每条链独立写 verified_vuln（confirmed 链才写）
+            for cr in f.chains:
+                if cr.poc_result == "confirmed":
+                    verified_row = VerifiedVuln(
+                        finding_id=fid,
+                        run_id=run_id,
+                        file_path=f.file_path,
+                        node_id=f.node_id,
+                        vuln_type=f.vuln_type,
+                        severity=f.severity,
+                        evidence=f.evidence,
+                        payload=cr.payload or "",
+                        poc=cr.payload or "",
+                        poc_result=cr.poc_result or "inconclusive",
+                        poc_output=cr.poc_output or "",
+                        md_path=md_path,
+                    )
+                    session.add(verified_row)
+                    verified_count += 1
+                    log.info("record: CONFIRMED 链 %s → %s", cr.chain_path[:50], md_path)
+
+            # 3d. 更新 finding.status
             if f.poc_result == "confirmed":
-                # INSERT verified_vuln（PK=finding_id，1:1 关系）
-                verified_row = VerifiedVuln(
-                    finding_id=fid,
-                    run_id=run_id,
-                    file_path=f.file_path,
-                    node_id=f.node_id,
-                    vuln_type=f.vuln_type,
-                    severity=f.severity,
-                    evidence=f.evidence,
-                    payload=f.payload or "",
-                    poc=f.poc or "",
-                    poc_result=f.poc_result or "inconclusive",
-                    poc_output=f.poc_output or "",
-                    md_path=md_path,
-                )
-                session.add(verified_row)
-                # UPDATE finding.status='verified'（ORM 风格：改属性 + commit 时自动 UPDATE）
                 finding_row.status = "verified"
-                verified_count += 1
-                log.info("record: CONFIRMED → %s", md_path)
             elif f.poc_result == "denied":
                 finding_row.status = "false_positive"
-                log.info("record: DENIED → %s", md_path)
             else:
                 log.info("record: INCONCLUSIVE → %s", md_path)
 
