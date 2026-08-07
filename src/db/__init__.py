@@ -30,7 +30,7 @@ from typing import Iterator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import AuditMemory, Base, FindingORM, Run, VerifiedVuln
+from .models import AuditMemory, Base, ChainResultORM, FindingORM, Run, VerifiedVuln
 
 log = logging.getLogger("secgraph.db")
 
@@ -90,6 +90,6 @@ def init_business_tables(db_path: str) -> None:
 
 
 __all__ = [
-    "Base", "Run", "FindingORM", "VerifiedVuln", "AuditMemory",
+    "Base", "Run", "FindingORM", "VerifiedVuln", "AuditMemory", "ChainResultORM",
     "get_session", "init_business_tables",
 ]

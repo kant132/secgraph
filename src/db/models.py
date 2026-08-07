@@ -260,4 +260,65 @@ class AuditMemory(Base):
     )
 
 
-__all__ = ["Base", "Run", "FindingORM", "VerifiedVuln", "AuditMemory"]
+# ---------------------------------------------------------------------------
+# chain_results — 每条调用链的独立审计+验证结果
+# ---------------------------------------------------------------------------
+
+class ChainResultORM(Base):
+    """一条调用链（route → ... → sink）的完整审计记录。
+
+    用途
+    ----
+    一个 sink 方法可能被多条不同 route 链到达。每条链有独立的：
+    - 路由路径（不同的 HTTP endpoint）
+    - 参数名（不同的 @RequestParam）
+    - 消毒情况（一条链有消毒，另一条可能没有）
+    - 可达性判断（reachable / unreachable / uncertain）
+    - payload（不同路由不同参数名 → 不同 payload）
+    - PoC 验证结果（confirmed / denied / inconclusive）
+
+    trace_route 阶段写入 reachable / payload / conditions / confidence。
+    verify 阶段写入 poc_result / poc_output。
+    record 阶段持久化到本表。
+
+    字段
+    ----
+    id            : 自增主键。
+    finding_id    : 外键到 findings.id。一个 finding 对应多条 chain_results。
+    run_id        : 外键到 runs.id（冗余存储，方便按 run 查链不 JOIN）。
+    node_id       : sink 方法的 codegraph node_id（冗余自 findings）。
+    chain_path    : 路径描述，如 "LoginController.login → UserService.auth → UserDao.query"。
+    chain_ids     : 逗号分隔的 codegraph node_id 列表（完整调用链节点）。
+    reachable     : 可达性判断：pending（未分析）/ reachable / unreachable / uncertain。
+    payload       : 本链的 HTTP payload（POST /path HTTP/1.1\\n\\n参数=值）。
+    conditions    : 触发条件（需要什么参数/认证/路径才能到达漏洞）。
+    confidence    : 本链的置信度 0.0-1.0。
+    poc_result    : PoC 验证结果：confirmed / denied / inconclusive（verify 阶段填）。
+    poc_output    : verify AI 推理文本。
+    created_at    : INSERT 时间。
+    """
+
+    __tablename__ = "chain_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="自增主键")
+    finding_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="外键到 findings.id")
+    run_id: Mapped[str] = mapped_column(String, nullable=False, comment="外键到 runs.id（冗余存储）")
+    node_id: Mapped[str] = mapped_column(String, nullable=False, comment="sink 方法的 codegraph node_id")
+    chain_path: Mapped[str] = mapped_column(Text, nullable=False, comment="路径描述 route → ... → sink")
+    chain_ids: Mapped[str] = mapped_column(Text, nullable=False, comment="逗号分隔的 node_id 列表")
+    reachable: Mapped[str] = mapped_column(String, nullable=False, default="pending", server_default="pending", comment="可达性：pending|reachable|unreachable|uncertain")
+    payload: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="", comment="本链 HTTP payload")
+    conditions: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="", comment="触发条件")
+    confidence: Mapped[float] = mapped_column(nullable=False, default=0.0, server_default="0", comment="本链置信度 0.0-1.0")
+    poc_result: Mapped[Optional[str]] = mapped_column(String, nullable=True, comment="PoC 结果：confirmed|denied|inconclusive")
+    poc_output: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="verify AI 推理文本")
+    created_at: Mapped[Optional[str]] = mapped_column(Text, server_default=text("datetime('now')"), comment="INSERT 时间")
+
+    __table_args__ = (
+        Index("idx_chain_finding_id", "finding_id"),
+        Index("idx_chain_run_id", "run_id"),
+        Index("idx_chain_reachable", "reachable"),
+    )
+
+
+__all__ = ["Base", "Run", "FindingORM", "VerifiedVuln", "AuditMemory", "ChainResultORM"]

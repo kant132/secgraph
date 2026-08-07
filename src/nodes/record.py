@@ -29,7 +29,7 @@ from pathlib import Path
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from ..db import FindingORM, Run, VerifiedVuln, get_session, init_business_tables
+from ..db import ChainResultORM, FindingORM, Run, VerifiedVuln, get_session, init_business_tables
 from ..prompts import render
 from ..state import AuditState, Finding
 
@@ -136,8 +136,24 @@ def record(state: AuditState) -> dict:
             # 3b. 每个 finding 都写 .md
             md_path = _write_finding_md(findings_dir, run_id, f)
 
-            # 3c. 每条链独立写 verified_vuln（confirmed 链才写）
+            # 3c. 每条链独立写 chain_results + verified_vuln（confirmed 链才写 verified_vuln）
             for cr in f.chains:
+                # 写 chain_results（所有链都写，不论 reachable/poc_result）
+                chain_row = ChainResultORM(
+                    finding_id=fid,
+                    run_id=run_id,
+                    node_id=f.node_id,
+                    chain_path=cr.chain_path,
+                    chain_ids=cr.chain_ids,
+                    reachable=cr.reachable,
+                    payload=cr.payload or "",
+                    conditions=cr.conditions or "",
+                    confidence=cr.confidence,
+                    poc_result=cr.poc_result,
+                    poc_output=cr.poc_output,
+                )
+                session.add(chain_row)
+
                 if cr.poc_result == "confirmed":
                     verified_row = VerifiedVuln(
                         finding_id=fid,
