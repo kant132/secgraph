@@ -20,6 +20,9 @@ from .queries import (
 
 log = logging.getLogger("secgraph.codegraph")
 
+# 进程级标记：哪些 db_path 已经建过 route_reachable 表，避免每次 CodegraphClient 都重建
+_initialized_dbs: set[str] = set()
+
 
 class CodegraphClient:
     """codegraph SQLite 索引的薄类型化封装。"""
@@ -30,14 +33,19 @@ class CodegraphClient:
         self._conn.row_factory = sqlite3.Row
         # 进程级缓存：{(sources_root, file_path): list[str]}，避免同一文件多次 read_text+splitlines
         self._file_lines: dict[tuple[str, str], list[str]] = {}
-        # 建临时表（调用一次，后续全部 JOIN）
-        self._conn.executescript(ROUTE_REACHABLE_INIT)
-        self._conn.commit()
-        count = self._conn.execute("SELECT COUNT(*) FROM route_reachable").fetchone()[0]
-        log.info("codegraph: route_reachable 表已建，%d 个可达 node", count)
+        # route_reachable 只建一次（进程级，同 db_path 跳过）
+        if db_path not in _initialized_dbs:
+            self._conn.executescript(ROUTE_REACHABLE_INIT)
+            self._conn.commit()
+            count = self._conn.execute("SELECT COUNT(*) FROM route_reachable").fetchone()[0]
+            log.info("codegraph: route_reachable 表已建，%d 个可达 node（首次初始化）", count)
+            _initialized_dbs.add(db_path)
+        else:
+            log.debug("codegraph: route_reachable 已初始化，跳过重建")
 
     def is_route_reachable(self, node_id: str) -> bool:
         """快速判断 node_id 是否在 route 可达集中。"""
+        log.debug("codegraph: SQL IS_ROUTE_REACHABLE node_id=%s", node_id)
         row = self._conn.execute(IS_ROUTE_REACHABLE, {"node_id": node_id}).fetchone()
         return row is not None
 
@@ -46,6 +54,7 @@ class CodegraphClient:
     def list_entry_methods(self, pkg_prefix: str, limit: int | None = None) -> list[MethodNode]:
         """Q1 — route 可达的入口方法（JOIN route_reachable 直接过滤）。"""
         pattern = f"%{pkg_prefix}%"
+        log.debug("codegraph: SQL Q1_ENTRY_METHODS pkg_pattern=%s limit=%s", pattern, limit)
         rows = self._conn.execute(Q1_ENTRY_METHODS, {"pkg_pattern": pattern}).fetchall()
         methods = [
             MethodNode(
@@ -69,6 +78,7 @@ class CodegraphClient:
 
     def list_fields_by_nodeid(self, node_id: str) -> list[FieldNode]:
         """Q3 — 给定任一方法 nodeid，返回同文件的成员字段（子查询取 file_path）。"""
+        log.debug("codegraph: SQL Q3_FIELDS_BY_NODE node_id=%s", node_id)
         rows = self._conn.execute(Q3_FIELDS_BY_NODE, {"node_id": node_id}).fetchall()
         return [
             FieldNode(
@@ -113,6 +123,7 @@ class CodegraphClient:
     def get_callee_bodies(self, sources_root: str, node_id: str) -> dict[str, str]:
         """Q4 — 入口方法的被调方法体 {callee_nodeid: '// fqn\nbody'}。
         仅 kind=calls 的边，distinct 去重。"""
+        log.debug("codegraph: SQL Q4_CALLEE_META node_id=%s", node_id)
         rows = self._conn.execute(Q4_CALLEE_META, {"node_id": node_id}).fetchall()
         return {
             r["callee_id"]: self._read_method_body(
@@ -126,6 +137,7 @@ class CodegraphClient:
     def get_call_chain_to_route(self, node_id: str) -> list[dict]:
         """Q5 — 从 vuln 方法反向追溯到 kind='route' 的 HTTP 入口。
         返回每条路径的元数据（route 节点 + chain_path + chain_ids）。"""
+        log.debug("codegraph: SQL Q5_REVERSE_CHAIN node_id=%s", node_id)
         rows = self._conn.execute(Q5_REVERSE_CHAIN, {"node_id": node_id}).fetchall()
         return [dict(r) for r in rows]
 
@@ -136,6 +148,7 @@ class CodegraphClient:
         if not nids:
             return {}
         placeholders = ",".join("?" for _ in nids)
+        log.debug("codegraph: SQL nodes IN(%s) nids=%d", placeholders, len(nids))
         rows = self._conn.execute(
             f"SELECT id, qualified_name, file_path, start_line, end_line FROM nodes WHERE id IN ({placeholders})",
             nids,

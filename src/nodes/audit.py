@@ -41,7 +41,7 @@ def audit_file(state: AuditState) -> dict:
         return {}  # loop done; router sends to record
 
     task = work_list[idx]
-    log.info("audit: [%d/%d] %s", idx + 1, len(work_list), task.file_path)
+    log.info("audit: === AUDIT [%d/%d] %s ===", idx + 1, len(work_list), task.file_path)
 
     prompt = _render_template(task)
     log.debug("audit: prompt=\n%s", prompt)

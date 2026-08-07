@@ -22,20 +22,19 @@ MEMORY_CONFIDENCE_THRESHOLD = 0.9
 
 def discovery_agent(state: AuditState) -> dict:
     """漏洞发现：discover → memory 查询 → audit（逐个，发现即返回）。"""
-    log.info("[discovery] 开始漏洞发现...")
-
-    # 1. discover（首次调用时执行，后续 supervisor 回来时 work_list 已有）
     work_list = state.get("work_list", [])
     audit_index = state.get("audit_index", 0)
 
+    # 1. discover（首次调用时执行，后续 supervisor 回来时 work_list 已有）
     if not work_list or audit_index >= len(work_list):
+        log.info("discovery: 开始 discover 入口方法...")
         discover_result = discover(state)
         state.update(discover_result)
         work_list = state.get("work_list", [])
         audit_index = 0
-        log.info("[discovery] discover 完成: %d 个方法", len(work_list))
+        log.info("discovery: discover 完成 → %d 个方法待审", len(work_list))
     else:
-        log.info("[discovery] 继续审计，当前 %d/%d", audit_index, len(work_list))
+        log.debug("discovery: 继续 audit [%d/%d]", audit_index, len(work_list))
 
     # 2. 查 memory（从 codegraph.db）— 置信度 >= 0.9 直接复用
     #    对每个待审方法都查（不是只查 audit_index==0）— 否则 memory cache 形同虚设

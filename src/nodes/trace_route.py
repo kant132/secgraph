@@ -91,7 +91,7 @@ def trace_route(state: AuditState) -> dict:
 
     sources_root = state["sources_root"]
     codegraph_db = state["codegraph_db"]
-    log.info("trace_route: %d 个 finding 待追溯", len(findings))
+    log.info("trace_route: === TRACE START %d 个 finding ===", len(findings))
 
     # 阶段 1：SQLite 串行抓数据 + 渲染 prompt
     prepped = []
@@ -123,4 +123,5 @@ def trace_route(state: AuditState) -> dict:
                     f.evidence += f"\n\n{EVIDENCE_TRACE_TAG} 不可达（LLM 分析失败: {str(e)[:80]}）"
                     f.confidence *= 0.3
 
+    log.info("trace_route: === TRACE END ===")
     return {"findings": findings}

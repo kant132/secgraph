@@ -33,6 +33,8 @@ def verify_finding(state: AuditState) -> dict:
     if not findings:
         return {}
 
+    log.info("verify: === VERIFY START %d 个 finding ===", len(findings))
+
     project_path = state.get("sources_root", "")
 
     # 1. 读 env.txt
@@ -148,8 +150,7 @@ def verify_finding(state: AuditState) -> dict:
 
     confirmed = sum(1 for f in findings if f.poc_result == "confirmed")
     denied = sum(1 for f in findings if f.poc_result == "denied")
-    log.info("verify: 完成 → %d confirmed, %d denied, %d inconclusive",
-             confirmed, denied, len(findings) - confirmed - denied)
+    log.info("verify: === VERIFY END → %d confirmed, %d denied ===", confirmed, denied)
 
     # 写运行历史到文件（不进 state — state 是决策，不是日志）
     _write_history(project_path, state.get("run_id", ""),

@@ -99,39 +99,48 @@ def _call_structured(prompt: str, model_cls, role: str):
     """结构化输出 + fallback：with_structured_output 失败 → raw + 剥 markdown + 手动解析。
 
     失败 → 打印 raw 返回内容方便调试 → raise。
+    日志策略：DEBUG 级别写完整 prompt + 完整 LLM 返回（进文件），INFO 级别只写摘要（进控制台）。
     """
     structured_llm = _get_structured(role, model_cls)
+    full_prompt = _NO_MARKDOWN_PREFIX + prompt
+
+    # 详细记录发给 LLM 的完整 prompt（DEBUG 级别，进日志文件，不进控制台）
+    log.debug("llm[%s]: ===== 发送给 LLM 的完整 prompt (%d 字) =====\n%s",
+              role, len(full_prompt), full_prompt)
 
     # 尝试 1：with_structured_output (json_mode)
     try:
-        result = structured_llm.invoke(_NO_MARKDOWN_PREFIX + prompt)
-        log.info("llm: 结构化输出成功 → %s", type(result).__name__)
+        result = structured_llm.invoke(full_prompt)
+        log.debug("llm[%s]: ===== LLM 结构化返回 =====\n%s", role, result)
+        log.info("llm[%s]: 结构化输出成功 → %s", role, type(result).__name__)
         return result
     except Exception as e:
-        log.warning("llm: 结构化输出失败 → %s，回退到 raw + 手动解析", str(e)[:200])
+        log.warning("llm[%s]: 结构化输出失败 → %s，回退到 raw + 手动解析", role, str(e)[:200])
 
     # 尝试 2：raw LLM + 剥 markdown + 手动解析
     raw_text = ""
     clean_json = ""
     try:
         raw_llm = _get_raw(role)
-        raw_resp = raw_llm.invoke(_NO_MARKDOWN_PREFIX + prompt)
+        raw_resp = raw_llm.invoke(full_prompt)
         raw_text = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
-        log.info("llm: raw LLM 返回（完整 %d 字）:\n%s", len(raw_text), raw_text)
+        log.debug("llm[%s]: ===== raw LLM 返回 (%d 字) =====\n%s", role, len(raw_text), raw_text)
 
         clean_json = _strip_markdown_json(raw_text)
+        log.debug("llm[%s]: 剥 markdown 后 JSON (%d 字)", role, len(clean_json))
+
         data = json.loads(clean_json)
         result = model_cls.model_validate(data)
-        log.info("llm: raw fallback 成功 → %s", type(result).__name__)
+        log.info("llm[%s]: raw fallback 成功 → %s", role, type(result).__name__)
         return result
     except json.JSONDecodeError as e2:
-        log.error("llm: JSON 解析失败 → %s", str(e2)[:200])
-        log.error("llm: raw 返回完整内容:\n%s", raw_text)
-        log.error("llm: 剥 markdown 后:\n%s", clean_json)
+        log.error("llm[%s]: JSON 解析失败 → %s", role, str(e2)[:200])
+        log.error("llm[%s]: raw 返回完整内容:\n%s", role, raw_text)
+        log.error("llm[%s]: 剥 markdown 后:\n%s", role, clean_json)
         raise
     except Exception as e2:
-        log.error("llm: raw fallback 也失败 → %s", str(e2)[:200])
-        log.error("llm: raw 返回完整内容:\n%s", raw_text)
+        log.error("llm[%s]: raw fallback 也失败 → %s", role, str(e2)[:200])
+        log.error("llm[%s]: raw 返回完整内容:\n%s", role, raw_text)
         raise
 
 

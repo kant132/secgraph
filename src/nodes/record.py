@@ -87,6 +87,8 @@ def record(state: AuditState) -> dict:
     findings_dir = state["findings_dir"]
     findings: list[Finding] = list(state.get("findings", []))
 
+    log.info("record: === RECORD START %d 个 finding ===", len(findings))
+
     # 1. 建业务表（ORM Base.metadata.create_all，IF NOT EXISTS）
     init_business_tables(codegraph_db)
 
@@ -173,6 +175,6 @@ def record(state: AuditState) -> dict:
 
         session.commit()
 
-    log.info("record: %d findings (%d confirmed) → codegraph.db + %s",
-             len(findings), verified_count, findings_dir)
+    log.info("record: === RECORD END → %d findings (%d confirmed) ===",
+             len(findings), verified_count)
     return {"verified": [f for f in findings if f.poc_result == "confirmed"]}
