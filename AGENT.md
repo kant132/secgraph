@@ -34,4 +34,17 @@
    - 必须用通用原则描述：按 CIA（机密性/完整性/可用性）语义判断，按污点传播流程分析
    - 必须用通用流程描述：先分析→再构造→再测试→失败则改进，循环直到成功或确认不可利用
    - 必须用通用规则描述：消毒措施与漏洞类型匹配才算安全、报错不算成功、session 失效不算失败
-   - 输出格式的字段枚举（如 vuln_type 的 SQLi|SSRF|deser|...）不算违规——那是 schema 定义不是漏洞专属说明
+    - 输出格式的字段枚举（如 vuln_type 的 SQLi|SSRF|deser|...）不算违规——那是 schema 定义不是漏洞专属说明
+11、测试分层规则（pytest markers）：
+    - unit: 纯函数测试，无 LLM 无 DB，<2s。改任何代码后必跑。
+      文件: test_config, test_pipeline, test_payload, test_login, test_codegraph_tools, test_trace_route
+    - integration: mock LLM + 真实 codegraph DB。改 codegraph/record/audit/discovery/llm 后必跑。
+      文件: test_refactor_regressions (record/llm cache/discovery memory/prompts)
+    - e2e: 真实 LLM 请求（1 个漏洞 SQLi），完整跑 audit→trace→verify→record。大改动才跑。
+      文件: test_e2e (1 个 SQLi nodeid，~3 个 LLM 调用)
+    - 默认 pytest 只跑 unit + integration（不消耗 token，<3s）
+    - pytest -m e2e 只跑 e2e（真实 LLM，~60s）
+    - pytest -m "unit or integration or e2e" 全跑（大改动验证）
+    - 禁止在 unit/integration 测试里发真实 LLM 请求（必须 mock）
+    - e2e 只选 1 个明确有漏洞的 nodeid（SQLi 最可靠），不跑多个漏洞
+    - 删除冗余 stage 测试（原 stage2/stage3 已删，逻辑合并到 e2e + integration）

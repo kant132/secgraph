@@ -8,3 +8,12 @@ dependencies = [
     "pytest>=9.1.1",
     "python-dotenv>=1.2.2",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: 纯函数测试，无 LLM 无 DB，<2s，改任何代码后必跑",
+    "integration: mock LLM + 真实 codegraph DB，改 codegraph/record/audit/discovery 后必跑",
+    "e2e: 真实 LLM 请求（1 个漏洞），大改动才跑",
+]
+# 默认跑 unit + integration（快，不消耗 token），e2e 需要显式 -m e2e
+addopts = "-m 'not e2e'"
