@@ -120,7 +120,6 @@ SELECT id, qualified_name, kind, file_path, start_line, end_line, depth, chain_p
 FROM chain
 WHERE kind = 'route'
 ORDER BY depth ASC
-LIMIT 3
 """
 
 # ---------------------------------------------------------------------------
