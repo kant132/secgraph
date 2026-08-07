@@ -21,3 +21,9 @@
    - main.py 顶部设 PYTHONUTF8=1 + PYTHONIOENCODING=utf-8
    - 日志用 FileHandler(encoding='utf-8')，不用 PowerShell 重定向（会乱码）
    - print 加 try/except UnicodeEncodeError
+9、模板必须和代码分离：
+   - 所有 prompt 模板、报告模板、文档模板放在 src/prompts/ 目录下（.md 文件）
+   - 代码里不内联 f-string 多行模板（禁止 body = f"""..."""）
+   - 用 src/prompts/__init__.py 的 render(name, **vars) 加载+填充模板
+   - 模板内用 {placeholder} 占位符，不用 f-string（避免 JSON {} 冲突）
+   - 默认值在 Python 端算好再传入模板，不在模板里写 or 逻辑

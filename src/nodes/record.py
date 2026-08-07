@@ -30,6 +30,7 @@ from pathlib import Path
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from ..db import FindingORM, Run, VerifiedVuln, get_session, init_business_tables
+from ..prompts import render
 from ..state import AuditState, Finding
 
 log = logging.getLogger("secgraph.record")
@@ -38,11 +39,8 @@ log = logging.getLogger("secgraph.record")
 def _write_finding_md(findings_dir: str, run_id: str, f: Finding) -> str:
     """为每个 finding 写 .md（不论验证结果），记录完整验证过程。
 
-    .md 文件名格式：{文件名}_{node_id 前 40 字符}_{vuln_type}_{poc_result}.md
-    例：SqlInjection_method_abc123_Sqli_confirmed.md
-
-    内容包括：漏洞类型/严重度/验证结果、源码路径、node_id、置信度、
-    完整 evidence（含可达性分析 + CIA 证明）、payload、PoC 命令、PoC 输出。
+    模板文件：src/prompts/finding_report_template.md
+    文件名格式：{文件名}_{node_id 前 40 字符}_{vuln_type}_{poc_result}.md
     """
     stem = Path(f.file_path).stem
     safe_node = f.node_id.replace(":", "_").replace("/", "_")[:40]
@@ -51,35 +49,20 @@ def _write_finding_md(findings_dir: str, run_id: str, f: Finding) -> str:
     out = Path(findings_dir) / name
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    body = f"""# {f.vuln_type} — {f.severity} — {f.poc_result or 'pending'}
-
-- **file**: `{f.file_path}`
-- **node_id**: `{f.node_id}`
-- **confidence**: {f.confidence}
-- **run_id**: {run_id}
-- **验证结果**: {f.poc_result or 'pending'}
-
-## Evidence
-{f.evidence}
-
-## Payload（发送的 PoC）
-```
-{f.payload or '(none)'}
-```
-
-## PoC（执行的命令）
-```
-{f.poc or '(none)'}
-```
-
-## PoC Result
-{f.poc_result or 'inconclusive'}
-
-## PoC Output（验证响应）
-```
-{f.poc_output or '(none)'}
-```
-"""
+    # 用模板渲染，默认值在 Python 端算好再传入
+    body = render("finding_report",
+                  vuln_type=f.vuln_type,
+                  severity=f.severity,
+                  poc_result=f.poc_result or "pending",
+                  file_path=f.file_path,
+                  node_id=f.node_id,
+                  confidence=f.confidence,
+                  run_id=run_id,
+                  evidence=f.evidence,
+                  payload=f.payload or "(none)",
+                  poc=f.poc or "(none)",
+                  poc_result_inconclusive=f.poc_result or "inconclusive",
+                  poc_output=f.poc_output or "(none)")
     out.write_text(body, encoding="utf-8")
     return str(out)
 
