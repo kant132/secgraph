@@ -10,6 +10,8 @@ import logging
 import sqlite3
 from pathlib import Path
 
+from sqlalchemy import text
+
 from ..state import FieldNode, MethodNode
 from .queries import (
     Q1_ENTRY_METHODS, Q3_FIELDS_BY_NODE, Q4_CALLEE_META, Q5_REVERSE_CHAIN,
@@ -144,64 +146,97 @@ class CodegraphClient:
             for r in rows
         }
 
-    # ---- 审计记忆（直接存 codegraph.db，和代码索引同库）-------------------
+    # ---- 审计记忆（ORM，和代码索引同库）---------------------------------
+    # audit_memory 表的 DDL + CRUD 走 SQLAlchemy ORM（src/db/models.py 的 AuditMemory）。
+    # CodegraphClient 本身保留裸 sqlite3 连接跑 Q1-Q5（递归 CTE 不适合 ORM），
+    # 但 audit_memory 的 init/save/lookup 用独立 ORM session。
 
     def init_memory_table(self) -> None:
-        """在 codegraph.db 里建 audit_memory 表（如果不存在）。"""
-        self._conn.executescript("""
-        CREATE TABLE IF NOT EXISTS audit_memory (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id         TEXT NOT NULL,
-            signature       TEXT NOT NULL,
-            input_validation TEXT DEFAULT '',
-            output_limitation TEXT DEFAULT '',
-            called_methods  TEXT DEFAULT '',
-            security_risk   TEXT NOT NULL,
-            vuln_type       TEXT NOT NULL,
-            confidence      REAL NOT NULL,
-            status          TEXT NOT NULL DEFAULT 'pending',
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_memory_node_id ON audit_memory(node_id);
-        CREATE INDEX IF NOT EXISTS idx_memory_confidence ON audit_memory(confidence);
-        """)
-        self._conn.commit()
+        """建 audit_memory 表（如果不存在）。走 ORM Base.metadata.create_all。
+
+        等价于原 `CREATE TABLE IF NOT EXISTS audit_memory (...)`。
+        ORM 模型定义在 src/db/models.py 的 AuditMemory 类。
+        """
+        from ..db import init_business_tables
+        init_business_tables(self.db_path)
 
     def save_memory(self, node_id: str, signature: str, vuln_type: str,
                     security_risk: str, confidence: float, status: str = "pending",
                     input_validation: str = "", output_limitation: str = "",
                     called_methods: str = "") -> None:
-        """保存/更新审计记忆。按 node_id UPSERT（SQLite 3.24+）。"""
-        self._conn.execute("""
-            INSERT INTO audit_memory
-                (node_id, signature, input_validation, output_limitation,
-                 called_methods, security_risk, vuln_type, confidence, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(node_id) DO UPDATE SET
-                signature = excluded.signature,
-                input_validation = excluded.input_validation,
-                output_limitation = excluded.output_limitation,
-                called_methods = excluded.called_methods,
-                security_risk = excluded.security_risk,
-                vuln_type = excluded.vuln_type,
-                confidence = excluded.confidence,
-                status = excluded.status,
-                updated_at = datetime('now')
-        """, (node_id, signature, input_validation, output_limitation,
-              called_methods, security_risk, vuln_type,
-              confidence, status))
-        self._conn.commit()
+        """保存/更新审计记忆。按 node_id UPSERT。
+
+        ORM 实现：用 SQLite 方言的 `insert().on_conflict_do_update()`
+        （等价于 `INSERT ... ON CONFLICT(node_id) DO UPDATE SET ...`）。
+        """
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from sqlalchemy import text
+        from ..db import AuditMemory, get_session
+
+        stmt = sqlite_insert(AuditMemory).values(
+            node_id=node_id,
+            signature=signature,
+            input_validation=input_validation,
+            output_limitation=output_limitation,
+            called_methods=called_methods,
+            security_risk=security_risk,
+            vuln_type=vuln_type,
+            confidence=confidence,
+            status=status,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["node_id"],
+            set_={
+                "signature": stmt.excluded.signature,
+                "input_validation": stmt.excluded.input_validation,
+                "output_limitation": stmt.excluded.output_limitation,
+                "called_methods": stmt.excluded.called_methods,
+                "security_risk": stmt.excluded.security_risk,
+                "vuln_type": stmt.excluded.vuln_type,
+                "confidence": stmt.excluded.confidence,
+                "status": stmt.excluded.status,
+                "updated_at": text("datetime('now')"),
+            },
+        )
+
+        with get_session(self.db_path) as session:
+            session.execute(stmt)
+            session.commit()
 
     def lookup_memory(self, node_id: str, min_confidence: float = 0.9) -> dict | None:
-        """查审计记忆。置信度 >= min_confidence 才返回（直接复用，不再审）。"""
-        row = self._conn.execute(
-            "SELECT * FROM audit_memory WHERE node_id = ? AND confidence >= ?",
-            (node_id, min_confidence)
-        ).fetchone()
-        if row:
-            return dict(row)
-        return None
+        """查审计记忆。置信度 >= min_confidence 才返回（直接复用，不再审）。
+
+        ORM 实现：`select(AuditMemory).where(node_id=..., confidence>=...)`。
+        返回 ORM 对象的 `__dict__`（去掉 SQLAlchemy 内部字段）。
+        """
+        from sqlalchemy import select
+        from ..db import AuditMemory, get_session
+
+        with get_session(self.db_path) as session:
+            row = session.execute(
+                select(AuditMemory).where(
+                    AuditMemory.node_id == node_id,
+                    AuditMemory.confidence >= min_confidence,
+                )
+            ).scalar_one_or_none()
+
+            if row is None:
+                return None
+            # 返回 plain dict（兼容原 sqlite3.Row 行为 — 调用方按 dict 取键）
+            return {
+                "id": row.id,
+                "node_id": row.node_id,
+                "signature": row.signature,
+                "input_validation": row.input_validation,
+                "output_limitation": row.output_limitation,
+                "called_methods": row.called_methods,
+                "security_risk": row.security_risk,
+                "vuln_type": row.vuln_type,
+                "confidence": row.confidence,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
 
     # ---- 生命周期 --------------------------------------------------------
 

@@ -1,13 +1,27 @@
 """codegraph SQL 查询 — 以 nodeid 为查询键。
 
-查询策略：
+查询策略
+--------
   Q1: 业务包内的带参方法（JOIN route_reachable，只返回 route 可达的）
-  Q2: 调用边
-  Q3: 成员字段
-  Q4: 被调方法体
-  Q5: 反向追溯 route 入口（18 层递归，JOIN route_reachable）
+  Q3: 成员字段（按 nodeid 查同文件）
+  Q4: 被调方法体（按 nodeid 查 callees）
+  Q5: 反向追溯 route 入口（18 层递归 CTE，JOIN route_reachable）
   ROUTE_REACHABLE_INIT: 建临时表（调用一次，后续全部 JOIN）
   IS_ROUTE_REACHABLE: 单行查 node_id 是否在 route_reachable 表
+
+为什么这些查询保留裸 SQL 而不 ORM 化
+------------------------------------
+1. **递归 CTE**：Q5 和 ROUTE_REACHABLE_INIT 使用 `WITH RECURSIVE` 遍历调用图，
+   ORM 没有等价抽象。SQLAlchemy 的 `cte()` + `select()` 可以写但极不自然，
+   可读性远差于原生 SQL。
+2. **codegraph CLI 外部建表**：nodes / edges / route_reachable 表由 codegraph CLI
+   建表和写入，不在 src/db/models.py 的 ORM 模型里。ORM session 只管业务表
+   （runs / findings / verified_vulns / audit_memory）。
+3. **性能**：Q1-Q5 每次跑 pipeline 都执行数十到数百次，ORM 的对象映射开销不划算。
+   裸 SQL + sqlite3.Row 性能更好。
+4. **IS_ROUTE_REACHABLE**：单行查 + 返回 bool，ORM 查询的开销大于裸 SQL。
+
+Q2 已删除（list_call_edges 是死代码），Q3-Q5 继续使用。
 """
 from __future__ import annotations
 

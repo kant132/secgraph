@@ -1,71 +1,49 @@
 """record node — 持久化所有 findings 到 codegraph.db + 为每个 finding 写 .md。
 
-findings/verified_vulns/runs 表直接在 codegraph.db 里建（和代码索引同库）。
+所有 DB 操作走 SQLAlchemy ORM（src/db/models.py 的 Run/FindingORM/VerifiedVuln）。
 .md 报告写到输入项目的 secgraph_findings/ 目录下。
+
+为什么用 ORM 而非裸 SQL
+------------------------
+1. 类型安全：Python 端字段名拼错会立即 AttributeError，不用等跑 SQL 才发现。
+2. UPSERT 语义清晰：SQLite 方言的 `insert().on_conflict_do_update()` 比
+   `INSERT ... ON CONFLICT ... DO UPDATE SET` 字符串更易读。
+3. 表结构单一来源：models.py 的 `Mapped[...]` 声明既是 DDL 又是类型注解，
+   不用维护两份 schema（DDL 字符串 + Python 类型）。
+4. 索引/约束随模型声明：`__table_args__` 里 Index 声明和列定义在一起，
+   不用单独维护 `CREATE INDEX` 语句。
+
+codegraph.db 双连接
+-------------------
+codegraph.db 同时被：
+- CodegraphClient（裸 sqlite3 连接，跑 codegraph 索引查询 Q1-Q5 + ROUTE_REACHABLE_INIT）
+- 本模块的 ORM session（SQLAlchemy engine，跑业务表 CRUD）
+访问。SQLite 支持多连接并发读；写事务加库级锁。业务表写只在 record/audit 两个节点，
+不会并发写。
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
-from ..codegraph import CodegraphClient
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from ..db import FindingORM, Run, VerifiedVuln, get_session, init_business_tables
 from ..state import AuditState, Finding
 
 log = logging.getLogger("secgraph.record")
 
-# 建 runs / findings / verified_vulns 表（直接写在 codegraph.db）。
-# 表结构和原 src/db/schema.sql 一致（commit 28dde56）。
-# audit_memory 由 CodegraphClient.init_memory_table() 单独建。
-_SCHEMA_DDL = """
-CREATE TABLE IF NOT EXISTS runs (
-    id              TEXT PRIMARY KEY,
-    mode            TEXT NOT NULL,
-    pkg_prefix      TEXT NOT NULL,
-    file_limit      INTEGER,
-    files_audited   INTEGER DEFAULT 0,
-    total_findings  INTEGER DEFAULT 0,
-    total_verified  INTEGER DEFAULT 0,
-    iteration       INTEGER DEFAULT 0,
-    started_at      TEXT DEFAULT (datetime('now')),
-    finished_at     TEXT
-);
-CREATE TABLE IF NOT EXISTS findings (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id      TEXT NOT NULL,
-    file_path   TEXT NOT NULL,
-    node_id     TEXT NOT NULL,
-    vuln_type   TEXT NOT NULL,
-    severity    TEXT NOT NULL,
-    evidence    TEXT NOT NULL,
-    payload     TEXT DEFAULT '',
-    confidence  REAL NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending',
-    created_at  TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS verified_vulns (
-    finding_id  INTEGER PRIMARY KEY,
-    run_id      TEXT NOT NULL,
-    file_path   TEXT NOT NULL,
-    node_id     TEXT NOT NULL,
-    vuln_type   TEXT NOT NULL,
-    severity    TEXT NOT NULL,
-    evidence    TEXT NOT NULL,
-    payload     TEXT DEFAULT '',
-    poc         TEXT NOT NULL,
-    poc_result  TEXT NOT NULL,
-    poc_output  TEXT,
-    md_path     TEXT,
-    verified_at TEXT DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_findings_run       ON findings(run_id);
-CREATE INDEX IF NOT EXISTS idx_findings_status    ON findings(status);
-CREATE INDEX IF NOT EXISTS idx_findings_vuln_type ON findings(vuln_type);
-CREATE INDEX IF NOT EXISTS idx_verified_run       ON verified_vulns(run_id);
-"""
-
 
 def _write_finding_md(findings_dir: str, run_id: str, f: Finding) -> str:
-    """为每个 finding 写 .md（不论验证结果），记录完整验证过程。"""
+    """为每个 finding 写 .md（不论验证结果），记录完整验证过程。
+
+    .md 文件名格式：{文件名}_{node_id 前 40 字符}_{vuln_type}_{poc_result}.md
+    例：SqlInjection_method_abc123_Sqli_confirmed.md
+
+    内容包括：漏洞类型/严重度/验证结果、源码路径、node_id、置信度、
+    完整 evidence（含可达性分析 + CIA 证明）、payload、PoC 命令、PoC 输出。
+    """
     stem = Path(f.file_path).stem
     safe_node = f.node_id.replace(":", "_").replace("/", "_")[:40]
     result_tag = f.poc_result or "pending"
@@ -107,61 +85,110 @@ def _write_finding_md(findings_dir: str, run_id: str, f: Finding) -> str:
 
 
 def record(state: AuditState) -> dict:
-    """持久化所有 findings 到 codegraph.db + 为每个 finding 写 .md。"""
+    """持久化所有 findings 到 codegraph.db（ORM）+ 为每个 finding 写 .md。
+
+    流程
+    ----
+    1. `init_business_tables` 建 runs/findings/verified_vulns/audit_memory 表（IF NOT EXISTS）
+    2. INSERT OR REPLACE run（run_id 唯一，重复跑覆盖）
+    3. 遍历 findings：
+       - INSERT finding（自增 PK，flush 后拿回 id 作为 fid）
+       - 写 .md 报告
+       - confirmed → INSERT verified_vuln（PK=finding_id，1:1）+ UPDATE finding.status='verified'
+       - denied    → UPDATE finding.status='false_positive'
+       - 其他       → 不更新 status（保持 pending）
+    4. UPDATE run 统计（finished_at / files_audited / total_findings / total_verified）
+    """
     codegraph_db = state["codegraph_db"]
     run_id = state["run_id"]
     findings_dir = state["findings_dir"]
     findings: list[Finding] = list(state.get("findings", []))
 
+    # 1. 建业务表（ORM Base.metadata.create_all，IF NOT EXISTS）
+    init_business_tables(codegraph_db)
+
     verified_count = 0
-    with CodegraphClient(codegraph_db) as cg:
-        cg._conn.executescript(_SCHEMA_DDL)
-        cg._conn.commit()
-
-        # 记录 run
-        cg._conn.execute(
-            "INSERT OR REPLACE INTO runs(id, mode, pkg_prefix, file_limit, iteration) VALUES (?, ?, ?, ?, ?)",
-            (run_id, state.get("mode", "dev"), state.get("pkg_prefix", ""),
-             state.get("file_limit"), state.get("iteration", 0)),
+    with get_session(codegraph_db) as session:
+        # 2. 记录 run（INSERT OR REPLACE 语义 — run_id 已存在则覆盖）
+        #    SQLite 方言的 on_conflict_do_update 等价于 INSERT OR REPLACE
+        run_stmt = sqlite_insert(Run).values(
+            id=run_id,
+            mode=state.get("mode", "dev"),
+            pkg_prefix=state.get("pkg_prefix", ""),
+            file_limit=state.get("file_limit"),
+            iteration=state.get("iteration", 0),
         )
-        cg._conn.commit()
+        run_stmt = run_stmt.on_conflict_do_update(
+            index_elements=["id"],
+            set_={
+                "mode": run_stmt.excluded.mode,
+                "pkg_prefix": run_stmt.excluded.pkg_prefix,
+                "file_limit": run_stmt.excluded.file_limit,
+                "iteration": run_stmt.excluded.iteration,
+            },
+        )
+        session.execute(run_stmt)
+        session.commit()
 
+        # 3. 遍历 findings
         for f in findings:
-            # 插入 finding
-            cur = cg._conn.execute(
-                "INSERT INTO findings(run_id, file_path, node_id, vuln_type, severity, evidence, payload, confidence, status) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, f.file_path, f.node_id, f.vuln_type, f.severity,
-                 f.evidence, f.payload, f.confidence, f.status),
+            # 3a. INSERT finding（ORM 对象）
+            finding_row = FindingORM(
+                run_id=run_id,
+                file_path=f.file_path,
+                node_id=f.node_id,
+                vuln_type=f.vuln_type,
+                severity=f.severity,
+                evidence=f.evidence,
+                payload=f.payload or "",
+                confidence=f.confidence,
+                status=f.status,
             )
-            fid = cur.lastrowid if cur.lastrowid else 0
+            session.add(finding_row)
+            session.flush()  # flush 拿回自增 PK（finding_row.id）
+            fid = finding_row.id
 
-            # 每个 finding 都写 .md
+            # 3b. 每个 finding 都写 .md
             md_path = _write_finding_md(findings_dir, run_id, f)
 
+            # 3c. 根据验证结果写 verified_vuln / 更新 status
             if f.poc_result == "confirmed":
-                cg._conn.execute(
-                    "INSERT INTO verified_vulns(finding_id, run_id, file_path, node_id, vuln_type, severity, evidence, payload, poc, poc_result, poc_output, md_path) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (fid, run_id, f.file_path, f.node_id, f.vuln_type, f.severity,
-                     f.evidence, f.payload, f.poc or "", f.poc_result or "inconclusive",
-                     f.poc_output or "", md_path),
+                # INSERT verified_vuln（PK=finding_id，1:1 关系）
+                verified_row = VerifiedVuln(
+                    finding_id=fid,
+                    run_id=run_id,
+                    file_path=f.file_path,
+                    node_id=f.node_id,
+                    vuln_type=f.vuln_type,
+                    severity=f.severity,
+                    evidence=f.evidence,
+                    payload=f.payload or "",
+                    poc=f.poc or "",
+                    poc_result=f.poc_result or "inconclusive",
+                    poc_output=f.poc_output or "",
+                    md_path=md_path,
                 )
-                cg._conn.execute("UPDATE findings SET status='verified' WHERE id=?", (fid,))
+                session.add(verified_row)
+                # UPDATE finding.status='verified'（ORM 风格：改属性 + commit 时自动 UPDATE）
+                finding_row.status = "verified"
                 verified_count += 1
                 log.info("record: CONFIRMED → %s", md_path)
             elif f.poc_result == "denied":
-                cg._conn.execute("UPDATE findings SET status='false_positive' WHERE id=?", (fid,))
+                finding_row.status = "false_positive"
                 log.info("record: DENIED → %s", md_path)
             else:
                 log.info("record: INCONCLUSIVE → %s", md_path)
 
-        # 更新 run 统计
-        cg._conn.execute(
-            "UPDATE runs SET finished_at=datetime('now'), files_audited=?, total_findings=?, total_verified=? WHERE id=?",
-            (state.get("audit_index", 0), len(findings), verified_count, run_id),
-        )
-        cg._conn.commit()
+        # 4. UPDATE run 统计
+        #    ORM 风格：查回 run 行，改属性，commit 时自动 UPDATE
+        run_row = session.get(Run, run_id)
+        if run_row:
+            run_row.finished_at = datetime.now().isoformat()
+            run_row.files_audited = state.get("audit_index", 0)
+            run_row.total_findings = len(findings)
+            run_row.total_verified = verified_count
+
+        session.commit()
 
     log.info("record: %d findings (%d confirmed) → codegraph.db + %s",
              len(findings), verified_count, findings_dir)
