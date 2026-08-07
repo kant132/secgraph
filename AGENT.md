@@ -27,3 +27,11 @@
    - 用 src/prompts/__init__.py 的 render(name, **vars) 加载+填充模板
    - 模板内用 {placeholder} 占位符，不用 f-string（避免 JSON {} 冲突）
    - 默认值在 Python 端算好再传入模板，不在模板里写 or 逻辑
+10、提示词必须是原则性、流程性、规则性说明：
+   - 禁止为某个具体漏洞类型写专属说明（不写"SQLi：响应中有数据库数据"、"XSS：响应中有 script 标签"等）
+   - 禁止为某个具体框架写专属说明（不写"@RequestParam 注解提取"、"Spring AOP"等）
+   - 禁止为某个具体目标写专属说明（不写 WebGoat 的 lessonCompleted、/SqlInjectionAdvanced 路径等）
+   - 必须用通用原则描述：按 CIA（机密性/完整性/可用性）语义判断，按污点传播流程分析
+   - 必须用通用流程描述：先分析→再构造→再测试→失败则改进，循环直到成功或确认不可利用
+   - 必须用通用规则描述：消毒措施与漏洞类型匹配才算安全、报错不算成功、session 失效不算失败
+   - 输出格式的字段枚举（如 vuln_type 的 SQLi|SSRF|deser|...）不算违规——那是 schema 定义不是漏洞专属说明
